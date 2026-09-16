@@ -1,4 +1,4 @@
-# Android RGB + Pose Recorder — Build Plan
+# PoseCam — Build Plan
 
 An AnySense-style capture app for Android: press record, get synchronized RGB frames and 6-DoF camera poses out the other side. Kotlin + ARCore, local-only, no cloud.
 
