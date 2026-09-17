@@ -7,9 +7,14 @@
 Usage:
     uv run tools/calibrate_camera.py data/capture-XXXX --pattern 9x6 --square 0.025
 
-Record ~30 s slowly moving a printed checkerboard's view across the whole image,
-especially the corners and edges, at several tilts (30-45 degrees), with the whole
-board in view and in focus. Calibrate with the same resolution AND focus mode as the
+Record ~60 s of a checkerboard, holding each pose ~1 s (moving frames are skewed by the
+rolling shutter and are filtered out using the gyro). What matters most:
+
+  * STRONG TILTS: view the board from the side/above so it looks like a trapezoid, not a
+    rectangle. Frontal views cannot separate focal length from distortion, however many
+    you take.
+  * The board should fill roughly half the image in the close views.
+  * Cover the image corners and edges too, with the whole board always inside the frame. Calibrate with the same resolution AND focus mode as the
 data it applies to. --pattern counts INNER corners
 (a board of 10x7 squares has 9x6 inner corners).
 
@@ -28,11 +33,12 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
-from posecam_io import frame_path, load_json, load_poses  # noqa: E402
+from posecam_io import frame_path, load_imu, load_json, load_poses  # noqa: E402
 
 
 MAX_RELIABLE_RMS_PX = 1.0
 MAX_FOCAL_SPREAD_PCT = 2.0
+MIN_TILT_DEG = 25.0
 
 
 def max_shift(k: np.ndarray, dist: np.ndarray, w: int, h: int) -> float:
@@ -71,6 +77,62 @@ def factory_intrinsics(camera: dict, w: int, h: int) -> np.ndarray | None:
     return np.array([[cal[0] * s, 0, cal[2] * s], [0, cal[1] * s, cal[3] * s - crop_y], [0, 0, 1]])
 
 
+def angular_rates(session: Path, poses, indices: list[int]) -> dict[int, float]:
+    """Mean |gyro| over each frame's readout, rad/s. Frames captured while the phone moves are
+    skewed by the ~29 ms rolling shutter and bias the fit, so they are filtered out."""
+    try:
+        gt, gw, gbias = load_imu(session, "gyro_uncal")
+        if len(gt) == 0:
+            gt, gw, gbias = load_imu(session, "gyro")
+        if gbias is not None:
+            gw = gw - gbias
+    except FileNotFoundError:
+        return {}
+    if len(gt) == 0:
+        return {}
+    magnitude = np.linalg.norm(gw, axis=1)
+    out = {}
+    for i in indices:
+        t0 = int(poses.timestamp_ns[i])
+        window = (gt >= t0) & (gt < t0 + 40_000_000)  # one frame's readout
+        out[i] = float(magnitude[window].mean()) if window.any() else float("nan")
+    return out
+
+
+def view_tilt(corners: np.ndarray, k: np.ndarray, board: np.ndarray) -> tuple[float, float]:
+    """Rough (tilt angle, tilt direction) of the board, using an approximate K just for
+    choosing a diverse subset of views."""
+    ok, rvec, _ = cv2.solvePnP(board, corners, k, None, flags=cv2.SOLVEPNP_IPPE)
+    if not ok:
+        return 0.0, 0.0
+    normal = cv2.Rodrigues(rvec)[0][:, 2]
+    tilt = np.degrees(np.arccos(min(1.0, abs(normal[2]))))
+    return tilt, np.degrees(np.arctan2(normal[1], normal[0]))
+
+
+def choose_views(found, rates, tilts, centres, want: int) -> list[int]:
+    """Greedy pick: prefer still frames, then spread over tilt angle, tilt direction and
+    board position, so focal length and distortion are separately constrained."""
+    def feature(n):
+        tilt, direction = tilts[n]
+        return np.array([tilt / 15.0, np.cos(np.radians(direction)), np.sin(np.radians(direction)),
+                         centres[n][0] / 100.0, centres[n][1] / 100.0])
+    order = sorted(range(len(found)), key=lambda n: rates[n])
+    chosen = [order[0]]
+    for _ in range(min(want, len(found)) - 1):
+        best, best_score = None, -1.0
+        for n in order:
+            if n in chosen:
+                continue
+            distance = min(float(np.linalg.norm(feature(n) - feature(m))) for m in chosen)
+            if distance > best_score:
+                best, best_score = n, distance
+        if best is None:
+            break
+        chosen.append(best)
+    return chosen
+
+
 def detect(session: Path, pattern: tuple[int, int], max_attempts: int):
     poses = load_poses(session)
     n = len(poses.rows)
@@ -98,6 +160,8 @@ def main():
     parser.add_argument("--square", type=float, default=0.025, help="square size in metres")
     parser.add_argument("--attempts", type=int, default=150, help="frames to try detecting in")
     parser.add_argument("--max-views", type=int, default=40, help="detections used for calibration")
+    parser.add_argument("--max-rate", type=float, default=0.15,
+                        help="max mean gyro rate (rad/s) for a usable view; rolling shutter skews moving frames")
     args = parser.parse_args()
 
     cols, rows = (int(v) for v in args.pattern.lower().split("x"))
@@ -105,12 +169,38 @@ def main():
     print(f"checkerboard found in {len(found)} sampled frames")
     if len(found) < 10:
         sys.exit("need at least 10 detections: check --pattern (inner corners) and lighting")
-    if len(found) > args.max_views:
-        found = [found[i] for i in np.linspace(0, len(found) - 1, args.max_views).round().astype(int)]
-
     board = np.zeros((cols * rows, 3), np.float32)
     board[:, :2] = np.mgrid[0:cols, 0:rows].T.reshape(-1, 2) * args.square
     w, h = size
+
+    poses = load_poses(args.session)
+    rates = angular_rates(args.session, poses, [i for i, _ in found])
+    still = [n for n, (i, _) in enumerate(found)
+             if not rates or not np.isfinite(rates.get(i, np.nan)) or rates[i] <= args.max_rate]
+    print(f"{len(still)} of {len(found)} detections were taken with the phone nearly still "
+          f"(<= {args.max_rate} rad/s)")
+    if len(still) < 12:
+        print("WARNING: few still frames; hold each pose for ~1 s before moving on")
+        still = list(range(len(found)))
+
+    guess = np.array([[500.0, 0, w / 2], [0, 500.0, h / 2], [0, 0, 1]])
+    tilts = {n: view_tilt(found[n][1], guess, board) for n in still}
+    centres = {n: found[n][1].reshape(-1, 2).mean(0) for n in still}
+    rate_of = {n: rates.get(found[n][0], 0.0) for n in still}
+    chosen = choose_views([found[n] for n in still], [rate_of[n] for n in still],
+                          [tilts[n] for n in still], [centres[n] for n in still], args.max_views)
+    found = [found[still[n]] for n in chosen]
+    tilt_values = [tilts[still[n]][0] for n in chosen]
+    areas = [cv2.contourArea(cv2.convexHull(c.reshape(-1, 2).astype(np.float32))) / (w * h) for _, c in found]
+    print(f"selected {len(found)} views, board tilt {min(tilt_values):.0f}-{max(tilt_values):.0f} deg "
+          f"(median {np.median(tilt_values):.0f}), board covers {100 * np.median(areas):.0f}% of the image "
+          f"(max {100 * max(areas):.0f}%)")
+    if max(tilt_values) < MIN_TILT_DEG:
+        print(f"WARNING: all views are within {max(tilt_values):.0f} deg of straight-on. Focal length and "
+              "distortion cannot be separated from frontal views: the board must look like a trapezoid "
+              "(clearly keystoned), not a rectangle.")
+    if np.median(areas) < 0.25:
+        print("WARNING: the board is small in the frame; get closer so it fills roughly half the image.")
     object_points = [board] * len(found)
     image_points = [c for _, c in found]
     rms, k, dist, _, _ = cv2.calibrateCamera(object_points, image_points, size, None, None)
