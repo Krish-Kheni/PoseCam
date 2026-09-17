@@ -112,7 +112,8 @@ def check(session: Path) -> list[str]:
             total = sum(p.stat().st_size for _, p in files.values())
             print(f"jpeg total {total / 1e6:.1f} MB, mean {total / len(files) / 1e3:.0f} kB")
 
-    errors += check_frame_metadata(session, ts)
+    errors += check_frame_metadata(session, ts, (session / "manifest.json").exists() and
+                                   json.loads((session / "manifest.json").read_text()).get("focus_mode"))
     errors += check_imu(session, ts)
     errors += check_intrinsics(session)
 
@@ -199,6 +200,21 @@ JUMP_SPEED_M_S = 3.0
 JUMP_RATE_RAD_S = 10.0
 
 
+def usable_segments(rows: list[dict], ts: list[int], breaks: list[int]) -> list[tuple[int, int, float]]:
+    """Continuous tracked runs, split at [breaks] (jump rows). Returns (start, end, seconds)."""
+    segments, start = [], None
+    for i, r in enumerate(rows):
+        broken = r["tracking_state"] != "TRACKING" or i in breaks
+        if broken and start is not None:
+            segments.append((start, i - 1, (ts[i - 1] - ts[start]) / 1e9))
+            start = None
+        if r["tracking_state"] == "TRACKING" and start is None:
+            start = i
+    if start is not None:
+        segments.append((start, len(rows) - 1, (ts[-1] - ts[start]) / 1e9))
+    return segments
+
+
 def check_pose_jumps(rows: list[dict], ts: list[int]) -> list[str]:
     jumps = []
     for i in range(len(rows) - 1):
@@ -213,13 +229,23 @@ def check_pose_jumps(rows: list[dict], ts: list[int]) -> list[str]:
             jumps.append((i + 1, step, math.degrees(angle), (ts[i + 1] - ts[0]) / 1e9))
     for row, step, deg, t in jumps:
         print(f"pose jump at row {row} (t={t:.2f} s): {100 * step:.1f} cm, {deg:.1f} deg in one frame")
+    segments = usable_segments(rows, ts, [j[0] for j in jumps])
+    if len(segments) > 1 or jumps:
+        longest = max(segments, key=lambda s: s[2], default=None)
+        print("usable segments (split at jumps and tracking loss): "
+              + ", ".join(f"rows {a}-{b} ({s:.1f} s)" for a, b, s in segments[:6])
+              + (f" … {len(segments) - 6} more" if len(segments) > 6 else ""))
+        if longest:
+            print(f"longest usable segment: rows {longest[0]}-{longest[1]} ({longest[2]:.1f} s, "
+                  f"{100 * (longest[1] - longest[0] + 1) / len(rows):.0f}% of the recording)")
     if jumps:
         return [f"{len(jumps)} pose jump(s) while tracking (relocalization): poses before and after "
-                f"row(s) {[j[0] for j in jumps][:5]} are not in a consistent frame"]
+                f"row(s) {[j[0] for j in jumps][:5]} are not in a consistent frame; "
+                "split there and use one segment (see docs/COORDINATES.md)"]
     return []
 
 
-def check_frame_metadata(session: Path, frame_ts: list[int]) -> list[str]:
+def check_frame_metadata(session: Path, frame_ts: list[int], focus_mode: str | None) -> list[str]:
     path = session / "frame_metadata.csv"
     if not path.exists():
         return []  # before posecam-4
@@ -242,7 +268,12 @@ def check_frame_metadata(session: Path, frame_ts: list[int]) -> list[str]:
         dist = "infinity" if hi == 0 else f"{1 / hi:.2f} m" if lo == hi else f"{1 / hi:.2f}..{(1 / lo if lo else float('inf')):.2f} m"
         print(f"focus distance: {lo:.3f}..{hi:.3f} diopters ({dist}; metric only if device.json calibration allows)")
         if hi - lo > 1e-3:
-            errors.append(f"focus distance changed during recording ({lo:.3f}..{hi:.3f} diopters)")
+            # Expected in AUTO; in FIXED the lens should not move at all.
+            message = f"focus distance changed during recording ({lo:.3f}..{hi:.3f} diopters)"
+            if focus_mode == "AUTO":
+                print(f"note: {message} (autofocus; check intrinsics.json for a matching change)")
+            else:
+                errors.append(message)
     if exposure:
         print(f"exposure: {min(exposure) / 1e6:.2f}..{max(exposure) / 1e6:.2f} ms (median "
               f"{statistics.median(exposure) / 1e6:.2f} ms)" + (f", rolling shutter skew {statistics.median(skew) / 1e6:.1f} ms" if skew else ""))

@@ -20,7 +20,9 @@ class PoseRecorder(
     private val imageMetadata: Map<String, Any?> = emptyMap(),
     poolSize: Int = 8,
 ) {
-    data class Summary(val directory: File, val frameCount: Long, val imagesSaved: Long, val imagesDropped: Long)
+    data class Summary(
+        val directory: File, val frameCount: Long, val imagesSaved: Long, val imagesDropped: Long, val poseJumps: Int,
+    )
 
     /** Buffers for image capture; the GL thread grabs from here. */
     val pool = BufferPool(poolSize)
@@ -44,6 +46,7 @@ class PoseRecorder(
     private var lastTimestampNs: Long? = null
     private var rowsSinceFlush = 0
     private val intrinsics = IntrinsicsTracker()
+    private val jumpDetector = PoseJumpDetector()
     private var lastIntrinsicsFrame = -1L
     private var extraMetadata: Map<String, Any?> = emptyMap()
 
@@ -52,6 +55,9 @@ class PoseRecorder(
     val recordedFrames: Long get() = synchronized(lock) { frameCount }
 
     val droppedImages: Long get() = synchronized(lock) { droppedByReason.values.sum() }
+
+    /** Relocalization jumps seen so far; shown live so a take can be redone immediately. */
+    val poseJumps: Int get() = synchronized(lock) { jumpDetector.count }
 
     /** Duration covered so far, from frame timestamps. */
     val recordedDurationNs: Long
@@ -109,6 +115,7 @@ class PoseRecorder(
         lastTimestampNs = null
         rowsSinceFlush = 0
         intrinsics.reset()
+        jumpDetector.reset()
         lastIntrinsicsFrame = -1
         extraMetadata = emptyMap()
         recordPressedElapsedNs = recordPressedElapsedRealtimeNs
@@ -160,8 +167,10 @@ class PoseRecorder(
 
             val row = if (translation != null && rotation != null) {
                 trackedCount++
+                jumpDetector.onTrackedFrame(frameCount, timestampNs, translation, rotation)
                 PoseCsv.trackedRow(frameCount, timestampNs, translation, rotation, imageStatus)
             } else {
+                jumpDetector.onUntrackedFrame()
                 PoseCsv.untrackedRow(frameCount, timestampNs, trackingState, imageStatus)
             }
             out.write(row)
@@ -203,7 +212,10 @@ class PoseRecorder(
             extraMetadata = extra
             writeIntrinsics(complete = true)
             writeManifest(isoUtc(wallTimeMs))
-            Summary(directory!!, frameCount, stats.written, droppedByReason.values.sum() + stats.failedFrameIndices.size)
+            Summary(
+                directory!!, frameCount, stats.written,
+                droppedByReason.values.sum() + stats.failedFrameIndices.size, jumpDetector.count,
+            )
         }
     }
 
@@ -237,6 +249,8 @@ class PoseRecorder(
             "record_pressed_elapsed_realtime_ns" to recordPressedElapsedNs,
             "images" to images,
             "capture_metadata" to metadataSummary.toJson(),
+            // ARCore relocalizations: poses either side are in different frames.
+            "pose_jumps" to jumpDetector.toJson(),
         )
         manifest["intrinsics_changed_during_recording"] = intrinsics.distinctValues > 1
         manifest.putAll(baseMetadata)
@@ -249,7 +263,7 @@ class PoseRecorder(
     }
 
     companion object {
-        const val FORMAT_VERSION = "posecam-4"
+        const val FORMAT_VERSION = "posecam-5"
         private const val INTRINSICS_EVERY_FRAMES = 30
         private const val FLUSH_EVERY_ROWS = 100
         private val random = SecureRandom()

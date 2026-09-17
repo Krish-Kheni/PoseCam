@@ -54,7 +54,9 @@ class PoseRecorderTest {
 
         val manifest = File(dir, "manifest.json").readText()
         assertTrue(manifest.contains("\"complete\": true"))
-        assertTrue(manifest.contains("\"format_version\": \"posecam-4\""))
+        assertTrue(manifest.contains("\"format_version\": \"posecam-5\""))
+        assertTrue(manifest.contains("\"pose_jumps\""))
+        assertEquals(0, summary.poseJumps)
         assertTrue(manifest.contains("\"record_pressed_elapsed_realtime_ns\": 90"))
         assertTrue(manifest.contains("\"ois_modes_seen\": [0]"))
         val metadataRows = File(dir, "frame_metadata.csv").readLines()

@@ -136,7 +136,19 @@ Rows with `tracking_state` other than `TRACKING` have empty pose fields.
 `PAUSED:<reason>` carries ARCore's `TrackingFailureReason`.
 
 Poses can **jump while `tracking_state` stays `TRACKING`**, when ARCore relocalizes.
-Observed on the S20 FE: 1.04 m and 68° in a single frame, with no state change. Poses
-before and after such a jump are not in a consistent frame. The app logs them as-is;
-`check_sync.py` flags any step faster than 3 m/s or 10 rad/s. Split the trajectory
-there, or discard the recording.
+Observed on the S20 FE: 1.04 m / 68° mid-recording, and 2.64 m / 105° on returning to
+the start of a walked loop. Poses before and after such a jump are not in a consistent
+frame.
+
+**Policy: record, then split; never discard in the app.**
+
+- The app detects jumps live (faster than 3 m/s or 10 rad/s between consecutive tracked
+  frames) and lists them in `manifest.json` → `pose_jumps`, with frame index, timestamp
+  and magnitude. The status bar shows a count so a take can be redone on the spot.
+- Nothing is dropped or smoothed on device: the recording stays raw.
+- At analysis time, split at each jump and at tracking loss, then keep the longest
+  segment, subject to a minimum usable length for the task. `check_sync.py` prints the
+  segments.
+- Discarding whole recordings is a choice that can still be made later, from split data;
+  splitting is not possible from data that was already discarded. Revisit once there are
+  enough episodes to be selective.

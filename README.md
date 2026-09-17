@@ -38,7 +38,7 @@ uv run tools/calibrate_camera.py data/capture-… --pattern 9x6 --square 0.025  
 On a new phone model, run `check_imu_alignment.py` on a recording with plenty of
 rotation before using its IMU data.
 
-## Output (format `posecam-4`)
+## Output (format `posecam-5`)
 
 ```
 capture-20260916T213140-9c433c/
@@ -62,6 +62,9 @@ capture-20260916T213140-9c433c/
   [COORDINATES.md](docs/COORDINATES.md).
 - `manifest.json` → `record_pressed_elapsed_realtime_ns` is the Record tap on the same
   clock as all timestamps.
+- `manifest.json` → `pose_jumps` lists ARCore relocalizations (see
+  [COORDINATES.md](docs/COORDINATES.md)): split there at analysis time, keep the longest
+  segment. Focus mode (fixed/auto) is selectable in the app; autofocus is the default.
 - The CPU image size is selectable in the app (button at bottom left). Intrinsics
   change with it, so recordings at different sizes are not interchangeable.
 - Older formats: `posecam-3` has no `frame_metadata.csv`; `posecam-2` also has no IMU,

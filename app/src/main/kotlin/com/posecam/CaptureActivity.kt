@@ -209,7 +209,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
      * and frame_metadata.csv record so it is visible offline.
      */
     private fun savedFocusMode(): Config.FocusMode =
-        if (getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_AUTOFOCUS, false)) {
+        if (getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_AUTOFOCUS, true)) {
             Config.FocusMode.AUTO
         } else {
             Config.FocusMode.FIXED
@@ -337,7 +337,9 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         recordButton.text = getString(R.string.record)
         Toast.makeText(
             this,
-            "Saved ${summary.frameCount} poses, ${summary.imagesSaved} images (${summary.imagesDropped} dropped)",
+            "Saved ${summary.frameCount} poses, ${summary.imagesSaved} images" +
+                (if (summary.imagesDropped > 0) ", ${summary.imagesDropped} dropped" else "") +
+                (if (summary.poseJumps > 0) ", ${summary.poseJumps} POSE JUMP(S)" else ""),
             Toast.LENGTH_LONG,
         ).show()
     }
@@ -441,13 +443,15 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
     }
 
     private fun updateUi(state: TrackingState, reason: TrackingFailureReason, armed: Boolean) {
+        val jumps = recorder.poseJumps
         val recording = recorder.isRecording
         val frames = recorder.recordedFrames
         val dropped = recorder.droppedImages
         val seconds = recorder.recordedDurationNs / 1e9
         val tracking = if (state == TrackingState.PAUSED && reason != TrackingFailureReason.NONE) "PAUSED ($reason)" else state.name
         val text = when {
-            recording -> "● REC  %.1f s  ·  %d frames  ·  %d dropped\nTracking: %s".format(seconds, frames, dropped, tracking)
+            recording -> "● REC  %.1f s  ·  %d frames  ·  %d dropped%s\nTracking: %s"
+                .format(seconds, frames, dropped, if (jumps > 0) "  ·  $jumps jump(s)" else "", tracking)
             armed -> "Ready to record\nTracking: $tracking"
             else -> "Move the phone slowly to start tracking…\nTracking: $tracking"
         }

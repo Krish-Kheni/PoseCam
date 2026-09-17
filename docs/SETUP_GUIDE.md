@@ -78,6 +78,8 @@ Run `uv run tools/check_sync.py data/<session>` on every recording. Take special
 of:
 
 - **pose jump**: ARCore relocalized mid-recording. Poses before and after are in
-  different frames. Follow the team's rule (split or discard).
+  different frames. Keep the recording: split at the jump during analysis and use the
+  longest segment (`check_sync.py` prints the segments). The app also shows a jump
+  count while recording, so you can redo a take on the spot if you prefer.
 - **optical stabilization was ON**: intrinsics are unreliable for that recording.
 - **gaps / dropped images**: the phone could not keep up (heat, storage, resolution).
