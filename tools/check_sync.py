@@ -17,11 +17,14 @@ Checks:
   - intrinsics.json exists and did not change during the recording
   - camera and IMU timestamps look like the same clock
   - frame_metadata.csv: one row per frame, OIS state, focus distance, exposure
+  - pose jumps between consecutive tracked frames (ARCore relocalization), which can
+    happen while tracking_state stays TRACKING
 Exit status is non-zero if any check fails.
 """
 
 import csv
 import json
+import math
 import re
 import statistics
 import sys
@@ -70,6 +73,7 @@ def check(session: Path) -> list[str]:
 
     tracked = sum(1 for r in rows if r["tracking_state"] == "TRACKING")
     print(f"tracked {tracked}/{n} ({100 * tracked / n:.1f}%)")
+    errors += check_pose_jumps(rows, ts)
 
     frames_dir = session / "frames"
     if has_images:
@@ -188,6 +192,31 @@ def check_imu(session: Path, frame_ts: list[int]) -> list[str]:
                           f"(starts {(ts[0] - frame_ts[0]) / 1e6:+.0f} ms, ends {(ts[-1] - frame_ts[-1]) / 1e6:+.0f} ms "
                           "relative to frames)")
     return errors
+
+
+# Faster than any handheld motion: a step above either is a discontinuity, not movement.
+JUMP_SPEED_M_S = 3.0
+JUMP_RATE_RAD_S = 10.0
+
+
+def check_pose_jumps(rows: list[dict], ts: list[int]) -> list[str]:
+    jumps = []
+    for i in range(len(rows) - 1):
+        a, b = rows[i], rows[i + 1]
+        if a["tracking_state"] != "TRACKING" or b["tracking_state"] != "TRACKING":
+            continue
+        dt = (ts[i + 1] - ts[i]) / 1e9
+        step = math.dist([float(a[k]) for k in ("tx", "ty", "tz")], [float(b[k]) for k in ("tx", "ty", "tz")])
+        dot = abs(sum(float(a[k]) * float(b[k]) for k in ("qx", "qy", "qz", "qw")))
+        angle = 2 * math.acos(min(1.0, dot))
+        if step / dt > JUMP_SPEED_M_S or angle / dt > JUMP_RATE_RAD_S:
+            jumps.append((i + 1, step, math.degrees(angle), (ts[i + 1] - ts[0]) / 1e9))
+    for row, step, deg, t in jumps:
+        print(f"pose jump at row {row} (t={t:.2f} s): {100 * step:.1f} cm, {deg:.1f} deg in one frame")
+    if jumps:
+        return [f"{len(jumps)} pose jump(s) while tracking (relocalization): poses before and after "
+                f"row(s) {[j[0] for j in jumps][:5]} are not in a consistent frame"]
+    return []
 
 
 def check_frame_metadata(session: Path, frame_ts: list[int]) -> list[str]:

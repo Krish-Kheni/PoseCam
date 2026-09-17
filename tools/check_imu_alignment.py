@@ -90,6 +90,19 @@ def main():
     if rms_cam < 0.3:
         print("WARNING: little rotation; rotate the phone about all three axes for a reliable fit")
 
+    # Pose jumps (ARCore relocalization) produce huge apparent rotation rates the gyro never
+    # saw. Exclude pairs whose pose rotation rate is far beyond any the gyro measured nearby.
+    w_gyro_mag = np.linalg.norm(interval_means(gt_s, gw, t[idx], t[idx + 1]), axis=1)
+    w_cam_mag = np.linalg.norm(w_cam, axis=1)
+    jumps = np.flatnonzero(w_cam_mag > np.maximum(3 * np.nan_to_num(w_gyro_mag), 0) + 2.0)
+    for j in jumps:
+        print(f"excluding pose jump at row {idx[j] + 1} (t={t[idx[j]] - t[0]:.2f} s): pose rate "
+              f"{w_cam_mag[j]:.1f} rad/s vs gyro {w_gyro_mag[j]:.1f} rad/s")
+    keep = np.ones(len(idx), bool)
+    keep[jumps] = False
+    idx, w_cam = idx[keep], w_cam[keep]
+    rms_cam = float(np.sqrt((w_cam ** 2).mean()))
+
     def residual(offset_s: float, mapping: np.ndarray):
         w_imu = interval_means(gt_s, gw, t[idx] + offset_s, t[idx + 1] + offset_s)
         ok = ~np.isnan(w_imu).any(1)

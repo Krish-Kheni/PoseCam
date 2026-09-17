@@ -133,6 +133,10 @@ interval. `manifest.json` records the measured range per session.
 ## Tracking
 
 Rows with `tracking_state` other than `TRACKING` have empty pose fields.
-`PAUSED:<reason>` carries ARCore's `TrackingFailureReason`. Poses can jump when ARCore
-relocalizes; this is logged as-is, so detect it offline by thresholding per-frame
-translation.
+`PAUSED:<reason>` carries ARCore's `TrackingFailureReason`.
+
+Poses can **jump while `tracking_state` stays `TRACKING`**, when ARCore relocalizes.
+Observed on the S20 FE: 1.04 m and 68° in a single frame, with no state change. Poses
+before and after such a jump are not in a consistent frame. The app logs them as-is;
+`check_sync.py` flags any step faster than 3 m/s or 10 rad/s. Split the trajectory
+there, or discard the recording.
