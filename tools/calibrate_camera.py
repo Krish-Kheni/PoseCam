@@ -32,6 +32,16 @@ from posecam_io import frame_path, load_json, load_poses  # noqa: E402
 
 
 MAX_RELIABLE_RMS_PX = 1.0
+MAX_FOCAL_SPREAD_PCT = 2.0
+
+
+def max_shift(k: np.ndarray, dist: np.ndarray, w: int, h: int) -> float:
+    """Largest pixel shift distortion causes anywhere in the image (not just the corner)."""
+    xs, ys = np.meshgrid(np.linspace(0, w - 1, 33), np.linspace(0, h - 1, 25))
+    pix = np.stack([xs.ravel(), ys.ravel()], 1)
+    rays = np.stack([(pix[:, 0] - k[0, 2]) / k[0, 0], (pix[:, 1] - k[1, 2]) / k[1, 1], np.ones(len(pix))], 1)
+    proj, _ = cv2.projectPoints(rays, np.zeros(3), np.zeros(3), k, dist)
+    return float(np.linalg.norm(proj.reshape(-1, 2) - pix, axis=1).max())
 
 
 def camera2_to_opencv(d: list[float]) -> np.ndarray:
@@ -92,7 +102,7 @@ def main():
 
     cols, rows = (int(v) for v in args.pattern.lower().split("x"))
     found, size = detect(args.session, (cols, rows), args.attempts)
-    print(f"checkerboard found in {len(found)} of up to {args.attempts} sampled frames")
+    print(f"checkerboard found in {len(found)} sampled frames")
     if len(found) < 10:
         sys.exit("need at least 10 detections: check --pattern (inner corners) and lighting")
     if len(found) > args.max_views:
@@ -101,12 +111,46 @@ def main():
     board = np.zeros((cols * rows, 3), np.float32)
     board[:, :2] = np.mgrid[0:cols, 0:rows].T.reshape(-1, 2) * args.square
     w, h = size
-    rms, k, dist, _, _ = cv2.calibrateCamera([board] * len(found), [c for _, c in found], size, None, None)
+    object_points = [board] * len(found)
+    image_points = [c for _, c in found]
+    rms, k, dist, _, _ = cv2.calibrateCamera(object_points, image_points, size, None, None)
     dist = dist.ravel()[:5]
     print(f"\ncalibrated from {len(found)} views of {w}x{h}: reprojection RMS {rms:.3f} px")
     print(f"  fx {k[0, 0]:.2f}  fy {k[1, 1]:.2f}  cx {k[0, 2]:.2f}  cy {k[1, 2]:.2f}")
     print(f"  distortion (OpenCV k1,k2,p1,p2,k3): {np.round(dist, 4)}")
     print(f"  corner displacement from distortion: {corner_displacement(k, dist, w, h):.1f} px")
+    print(f"  largest distortion shift anywhere in the image: {max_shift(k, dist, w, h):.1f} px")
+
+    # Coverage: corners seen, as a fraction of the image area (10x10 cells).
+    cells = np.zeros((10, 10), bool)
+    for c in image_points:
+        for u, v in c.reshape(-1, 2):
+            cells[min(9, int(v / h * 10)), min(9, int(u / w * 10))] = True
+    coverage = 100 * cells.mean()
+
+    # Conditioning: if the reprojection error barely moves when the distortion model
+    # changes but the focal length does, focal length and distortion are trading off
+    # and neither is pinned down. More tilt and wider coverage fix this, not more frames.
+    variants = {
+        "no tangential": cv2.CALIB_ZERO_TANGENT_DIST,
+        "k1,k2 only": cv2.CALIB_ZERO_TANGENT_DIST | cv2.CALIB_FIX_K3,
+        "k1 only": cv2.CALIB_ZERO_TANGENT_DIST | cv2.CALIB_FIX_K2 | cv2.CALIB_FIX_K3,
+        "no distortion": cv2.CALIB_ZERO_TANGENT_DIST | cv2.CALIB_FIX_K1 | cv2.CALIB_FIX_K2 | cv2.CALIB_FIX_K3,
+    }
+    focals = [k[0, 0]]
+    print("\nstability across distortion models (fx should barely move):")
+    for label, flags in variants.items():
+        v_rms, v_k, _, _, _ = cv2.calibrateCamera(object_points, image_points, size, None, None, flags=flags)
+        focals.append(v_k[0, 0])
+        print(f"  {label:16s} RMS {v_rms:.3f} px, fx {v_k[0, 0]:.1f}")
+    spread = 100 * (max(focals) - min(focals)) / np.mean(focals)
+    print(f"image coverage {coverage:.0f}% of cells, fx spread across models {spread:.1f}%")
+    if spread > MAX_FOCAL_SPREAD_PCT:
+        print(f"\nverdict: UNRELIABLE (fx spread {spread:.1f}% > {MAX_FOCAL_SPREAD_PCT}%). The views do not "
+              "separate focal length from distortion. Record again with more tilt (30-45 degrees in "
+              "several directions, not just straight on), the board filling more of the frame, and a "
+              "range of distances. Coverage of the image corners matters more than frame count.")
+        sys.exit(1)
 
     arcore = load_json(args.session, "intrinsics.json")
     if arcore.get("fx"):
