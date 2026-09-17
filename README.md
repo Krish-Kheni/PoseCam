@@ -31,13 +31,16 @@ uv run tools/check_sync.py data/capture-…      # timing + pose/image consisten
 uv run tools/plot_trajectory.py data/capture-…  # stats + plot (--save writes trajectory.png)
 ```
 
-## Output (format `posecam-2`)
+## Output (format `posecam-3`)
 
 ```
 capture-20260916T213140-9c433c/
-├── frames/         000000_<timestamp_ns>.jpg, ...
-├── poses.csv       frame_index,timestamp_ns,tx,ty,tz,qx,qy,qz,qw,tracking_state,image
-└── manifest.json   session info, device, ARCore version, camera config, image stats
+├── frames/          000000_<timestamp_ns>.jpg, ...
+├── poses.csv        frame_index,timestamp_ns,tx,ty,tz,qx,qy,qz,qw,tracking_state,image
+├── imu.csv          timestamp_ns,sensor,x,y,z,bias_x,bias_y,bias_z
+├── intrinsics.json  fx, fy, cx, cy, width, height (+ whether they changed)
+├── device.json      phone, Camera2 characteristics, IMU sensor details
+└── manifest.json    session info, versions, camera config, image/IMU stats, clock check
 ```
 
 - One row per distinct camera frame, including untracked frames (empty pose fields).
@@ -46,4 +49,8 @@ capture-20260916T213140-9c433c/
   `deadline_exceeded`, `resources_exhausted`.
 - Images are the camera's CPU image in sensor-native orientation (landscape, not
   rotated for the screen), matching the orientation of the camera pose.
-- `posecam-1` (pose-only) sessions have no `image` column and no `frames/`.
+- `imu.csv` interleaves `accel` and `gyro_uncal` samples in arrival order. The bias
+  columns are empty for `accel`. The axes are the phone's, not the camera's: see
+  [COORDINATES.md](docs/COORDINATES.md).
+- Older formats: `posecam-2` has no IMU, intrinsics or device files; `posecam-1` also
+  has no `image` column and no `frames/`.

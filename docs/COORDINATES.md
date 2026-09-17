@@ -44,6 +44,54 @@ JPEGs in `frames/` are the ARCore CPU image in the sensor's native orientation
 (rows, downward) align with the camera frame's +X and −Y, so projecting a world
 point with the pose and intrinsics needs no extra rotation for display.
 
+## IMU
+
+`imu.csv` rows are raw `SensorEvent` values in the **Android sensor frame**, which
+is defined against the phone's natural orientation (portrait for phones), not the
+camera:
+
+- **+X** to the right of the screen, **+Y** toward the top of the screen, **+Z** out
+  of the screen (toward the user). Right-handed.
+- `accel`: `TYPE_ACCELEROMETER`, m/s². Includes gravity: a phone lying flat on a table
+  reads about `(0, 0, +9.81)`.
+- `gyro_uncal`: `TYPE_GYROSCOPE_UNCALIBRATED`, rad/s, counter-clockwise positive
+  (right-hand rule). `x,y,z` are raw rates with no drift compensation; `bias_x..z` is
+  the platform's drift estimate (subtract it to get the calibrated rate).
+- `gyro`: `TYPE_GYROSCOPE` (calibrated), only on phones without an uncalibrated gyro.
+
+**This is not the camera frame.** The ARCore camera frame follows the image sensor's
+landscape readout, while the IMU frame follows the portrait screen. On most phones
+the back camera is mounted with `SENSOR_ORIENTATION` 90° (recorded in `device.json`),
+giving:
+
+```
+camera +X  =  IMU −Y
+camera +Y  =  IMU +X
+camera +Z  =  IMU +Z
+```
+
+Verified on the S20 FE (SM-G781B): a least-squares fit of gyro rates to angular
+velocity from `poses.csv` recovered exactly this axis mapping, with a residual of about
+2.5% of the signal at zero time offset. Verify it on other models the same way, or
+estimate the full camera-IMU extrinsics with a calibration tool such as Kalibr. When the manufacturer
+publishes it, `device.json` also carries `lens_pose_rotation`/`lens_pose_translation`.
+
+Accelerometer and gyroscope samples are asynchronous and not aligned with camera
+frames. Interpolate offline.
+
+## Intrinsics
+
+`intrinsics.json` holds `Camera.getImageIntrinsics()` for the CPU image in `frames/`:
+`fx, fy, cx, cy` in pixels for `width × height`. It's a pinhole model, and ARCore
+reports no distortion coefficients. It is not yet verified whether the CPU image is
+undistorted. Camera2's factory `lens_distortion` and `lens_intrinsic_calibration`
+(for the full sensor array, not this image) are in `device.json` when the phone
+publishes them. On the S20 FE they show mild radial distortion (k1 ≈ 0.034), and a
+scaled focal length about 3% above ARCore's. Calibrate yourself if you need
+sub-pixel accuracy. Values
+are sampled about once a second; `changed_during_recording` must be `false` for them
+to apply to every frame.
+
 ## Relative poses
 
 To express poses relative to the first recorded frame (offline):
@@ -55,7 +103,11 @@ T_rel[i] = inverse(T[0]) · T[i]
 ## Timestamps
 
 `timestamp_ns` is `Frame.getTimestamp()`: nanoseconds on the same clock as Camera2
-`SENSOR_TIMESTAMP` and Android sensor `event.timestamp`. It is not wall time and
+`SENSOR_TIMESTAMP`. IMU rows use `SensorEvent.timestamp`. Both are on
+`SystemClock.elapsedRealtimeNanos()` when `device.json` → `camera.timestamp_source`
+is `REALTIME`. Otherwise they may be offset from each other: don't fuse without
+checking. `manifest.json` → `clock_check` records how far each was behind
+`elapsedRealtimeNanos` at capture, as a sanity check. Timestamps are not wall time and
 not comparable across devices or reboots. `manifest.json` records wall time for
 humans only.
 

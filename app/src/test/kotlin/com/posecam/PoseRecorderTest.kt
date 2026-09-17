@@ -28,14 +28,18 @@ class PoseRecorderTest {
     @Test
     fun writesPosesFramesAndManifest() {
         val recorder = recorder()
-        val dir = recorder.start(mapOf("device" to mapOf("model" to "SM-G781B")))
+        val dir = recorder.start(mapOf("app_version" to "0.1.0"), device = mapOf("model" to "SM-G781B"))
         assertTrue(dir.name.matches(Regex("capture-\\d{8}T\\d{6}-[0-9a-f]{6}")))
         assertTrue(File(dir, "manifest.json").readText().contains("\"complete\": false"))
 
+        assertTrue(recorder.wantsIntrinsics())
+        recorder.onIntrinsics(Intrinsics(500f, 500f, 320f, 240f, 640, 480))
+        assertTrue(File(dir, "intrinsics.json").readText().contains("\"complete\": false"))
+        assertFalse(recorder.wantsIntrinsics())
         recorder.onFrame(100, "TRACKING", t, q, recorder.captured(100))
         recorder.onFrame(133, "PAUSED:INSUFFICIENT_FEATURES", null, null, FrameImage.Dropped(FrameImage.NOT_YET_AVAILABLE))
         recorder.onFrame(166, "TRACKING", t, q, recorder.captured(166))
-        val summary = recorder.stop()!!
+        val summary = recorder.stop(extra = mapOf("imu" to mapOf("accel" to mapOf("samples" to 42))))!!
 
         assertEquals(3, summary.frameCount)
         assertEquals(2, summary.imagesSaved)
@@ -48,12 +52,17 @@ class PoseRecorderTest {
 
         val manifest = File(dir, "manifest.json").readText()
         assertTrue(manifest.contains("\"complete\": true"))
-        assertTrue(manifest.contains("\"format_version\": \"posecam-2\""))
+        assertTrue(manifest.contains("\"format_version\": \"posecam-3\""))
+        assertTrue(manifest.contains("\"samples\": 42"))
+        assertTrue(manifest.contains("\"intrinsics_changed_during_recording\": false"))
+        assertTrue(File(dir, "device.json").readText().contains("\"model\": \"SM-G781B\""))
+        val intrinsics = File(dir, "intrinsics.json").readText()
+        assertTrue(intrinsics.contains("\"complete\": true"))
+        assertTrue(intrinsics.contains("\"fx\": 500.0"))
         assertTrue(manifest.contains("\"frame_count\": 3"))
         assertTrue(manifest.contains("\"tracked_frame_count\": 2"))
         assertTrue(manifest.contains("\"written\": 2"))
         assertTrue(manifest.contains("\"not_yet_available\": 1"))
-        assertTrue(manifest.contains("\"model\": \"SM-G781B\""))
         assertEquals(8, recorder.pool.available)
     }
 

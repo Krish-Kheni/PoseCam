@@ -9,7 +9,8 @@ import java.util.Locale
 import java.util.TimeZone
 
 /**
- * Writes one capture session: poses.csv, frames/ and manifest.json.
+ * Writes one capture session: poses.csv, frames/, intrinsics.json, device.json and
+ * manifest.json. (imu.csv is written alongside by [ImuRecorder].)
  *
  * Thread-safe: frames arrive on the GL thread, start/stop come from the UI thread.
  */
@@ -39,6 +40,9 @@ class PoseRecorder(
     private var firstTimestampNs: Long? = null
     private var lastTimestampNs: Long? = null
     private var rowsSinceFlush = 0
+    private val intrinsics = IntrinsicsTracker()
+    private var lastIntrinsicsFrame = -1L
+    private var extraMetadata: Map<String, Any?> = emptyMap()
 
     val isRecording: Boolean get() = synchronized(lock) { writer != null }
 
@@ -62,8 +66,28 @@ class PoseRecorder(
         writer != null && lastTimestampNs.let { it == null || timestampNs > it }
     }
 
-    /** [metadata] is merged into manifest.json (device, app and camera details). */
-    fun start(metadata: Map<String, Any?>, wallTimeMs: Long = System.currentTimeMillis()): File = synchronized(lock) {
+    /** True when the GL thread should sample intrinsics for the next frame (about once a second). */
+    fun wantsIntrinsics(): Boolean = synchronized(lock) {
+        writer != null && (lastIntrinsicsFrame < 0 || frameCount - lastIntrinsicsFrame >= INTRINSICS_EVERY_FRAMES)
+    }
+
+    fun onIntrinsics(value: Intrinsics) {
+        synchronized(lock) {
+            if (writer == null) return
+            lastIntrinsicsFrame = frameCount
+            if (intrinsics.update(frameCount, value)) writeIntrinsics(complete = false)
+        }
+    }
+
+    /**
+     * [metadata] is merged into manifest.json (app and camera details); [device] is written
+     * as device.json.
+     */
+    fun start(
+        metadata: Map<String, Any?>,
+        device: Map<String, Any?> = emptyMap(),
+        wallTimeMs: Long = System.currentTimeMillis(),
+    ): File = synchronized(lock) {
         check(writer == null) { "Already recording" }
         sessionId = newSessionId(wallTimeMs)
         val dir = File(capturesRoot, sessionId)
@@ -80,7 +104,11 @@ class PoseRecorder(
         firstTimestampNs = null
         lastTimestampNs = null
         rowsSinceFlush = 0
+        intrinsics.reset()
+        lastIntrinsicsFrame = -1
+        extraMetadata = emptyMap()
 
+        File(dir, "device.json").writeText(Json.write(device) + "\n")
         frameWriter = FrameWriter(File(dir, "frames"), encoder, pool)
         writer = File(dir, "poses.csv").bufferedWriter(bufferSize = 64 * 1024).apply {
             write(PoseCsv.HEADER)
@@ -138,8 +166,11 @@ class PoseRecorder(
         }
     }
 
-    /** Stops recording and waits for queued frames to be written. Call from the UI thread. */
-    fun stop(wallTimeMs: Long = System.currentTimeMillis()): Summary? {
+    /**
+     * Stops recording and waits for queued frames to be written. Call from the UI thread.
+     * [extra] is merged into manifest.json (e.g. IMU stats).
+     */
+    fun stop(extra: Map<String, Any?> = emptyMap(), wallTimeMs: Long = System.currentTimeMillis()): Summary? {
         val frames = synchronized(lock) {
             val out = writer ?: return null
             out.close()
@@ -150,6 +181,8 @@ class PoseRecorder(
         val stats = frames.finish()
         return synchronized(lock) {
             writerStats = stats
+            extraMetadata = extra
+            writeIntrinsics(complete = true)
             writeManifest(isoUtc(wallTimeMs))
             Summary(directory!!, frameCount, stats.written, droppedByReason.values.sum() + stats.failedFrameIndices.size)
         }
@@ -182,12 +215,19 @@ class PoseRecorder(
             "last_timestamp_ns" to lastTimestampNs,
             "images" to images,
         )
+        manifest["intrinsics_changed_during_recording"] = intrinsics.distinctValues > 1
         manifest.putAll(baseMetadata)
+        manifest.putAll(extraMetadata)
         File(directory, "manifest.json").writeText(Json.write(manifest) + "\n")
     }
 
+    private fun writeIntrinsics(complete: Boolean) {
+        File(directory, "intrinsics.json").writeText(Json.write(intrinsics.toJson(complete)) + "\n")
+    }
+
     companion object {
-        const val FORMAT_VERSION = "posecam-2"
+        const val FORMAT_VERSION = "posecam-3"
+        private const val INTRINSICS_EVERY_FRAMES = 30
         private const val FLUSH_EVERY_ROWS = 100
         private val random = SecureRandom()
 

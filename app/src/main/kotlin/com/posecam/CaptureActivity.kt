@@ -9,6 +9,7 @@ import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.view.WindowManager
@@ -40,6 +41,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
 
     @Volatile private var session: Session? = null
     private var sessionMetadata: Map<String, Any?> = emptyMap()
+    private var deviceInfo: Map<String, Any?> = emptyMap()
     private var userRequestedInstall = true
     private var permissionRequestPending = false
     private var fatalError: String? = null
@@ -48,6 +50,11 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
     private val backgroundRenderer = BackgroundRenderer()
     private val trackingGate = TrackingGate()
     private lateinit var imageGrabber: ImageGrabber
+    private val imuRecorder = ImuRecorder()
+    private lateinit var imuSource: ImuSource
+
+    /** SystemClock.elapsedRealtimeNanos() minus the first recorded frame's timestamp. */
+    @Volatile private var firstFrameAgeNs: Long? = null
 
     // GL thread state.
     private var textureBoundTo: Session? = null
@@ -82,6 +89,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             ),
         )
         imageGrabber = ImageGrabber(recorder.pool)
+        imuSource = ImuSource(this, imuRecorder)
 
         surfaceView.preserveEGLContextOnPause = true
         surfaceView.setEGLContextClientVersion(2)
@@ -120,6 +128,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             return
         }
         surfaceView.onResume()
+        imuSource.resume()
     }
 
     override fun onPause() {
@@ -128,7 +137,8 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         // Stop the GL thread first so no frame arrives mid-stop.
         surfaceView.onPause()
         session?.pause()
-        recorder.stop()?.let { onRecordingStopped(it) }
+        stopRecording()
+        imuSource.pause()
     }
 
     override fun onDestroy() {
@@ -167,6 +177,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             })
 
             sessionMetadata = buildMetadata(cameraConfig)
+            deviceInfo = DeviceInfo.collect(this, cameraConfig.cameraId, imuSource.describe())
             session = newSession
             return true
         } catch (e: UnavailableException) {
@@ -214,10 +225,12 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
 
     private fun toggleRecording() {
         if (recorder.isRecording) {
-            recorder.stop()?.let { onRecordingStopped(it) }
+            stopRecording()
         } else {
             try {
-                val dir = recorder.start(sessionMetadata)
+                firstFrameAgeNs = null
+                val dir = recorder.start(sessionMetadata, deviceInfo)
+                imuRecorder.start(dir)
                 Log.i(TAG, "Recording started: $dir")
                 recordButton.text = getString(R.string.stop)
             } catch (e: Exception) {
@@ -225,6 +238,20 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
                 Toast.makeText(this, "Could not start recording: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    private fun stopRecording() {
+        val imu = imuRecorder.stop() ?: emptyMap()
+        val extra = linkedMapOf<String, Any?>(
+            "imu" to imu,
+            // Both should be small and positive (processing latency) if camera and IMU
+            // timestamps share the elapsedRealtimeNanos clock.
+            "clock_check" to linkedMapOf(
+                "elapsed_realtime_minus_first_frame_timestamp_ns" to firstFrameAgeNs,
+                "elapsed_realtime_minus_last_imu_timestamp_ns" to imuSource.lastSampleAgeNs,
+            ),
+        )
+        recorder.stop(extra)?.let { onRecordingStopped(it) }
     }
 
     private fun onRecordingStopped(summary: PoseRecorder.Summary) {
@@ -300,6 +327,14 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         }
 
         if (recorder.wantsFrame(timestampNs)) {
+            if (firstFrameAgeNs == null) firstFrameAgeNs = SystemClock.elapsedRealtimeNanos() - timestampNs
+            if (recorder.wantsIntrinsics()) {
+                val k = camera.imageIntrinsics
+                val f = k.focalLength
+                val c = k.principalPoint
+                val size = k.imageDimensions
+                recorder.onIntrinsics(Intrinsics(f[0], f[1], c[0], c[1], size[0], size[1]))
+            }
             val image = imageGrabber.grab(frame)
             if (state == TrackingState.TRACKING) {
                 // Physical camera pose, not the display-oriented one.

@@ -13,6 +13,9 @@ Checks:
   - every row marked image=saved has exactly one JPEG with the same index and timestamp
   - no JPEG exists without a matching row, and no leftover .tmp files
   - manifest.json agrees with poses.csv
+  - imu.csv: per-sensor rate, gaps, non-increasing timestamps, coverage of the frame span
+  - intrinsics.json exists and did not change during the recording
+  - camera and IMU timestamps look like the same clock
 Exit status is non-zero if any check fails.
 """
 
@@ -104,6 +107,9 @@ def check(session: Path) -> list[str]:
             total = sum(p.stat().st_size for _, p in files.values())
             print(f"jpeg total {total / 1e6:.1f} MB, mean {total / len(files) / 1e3:.0f} kB")
 
+    errors += check_imu(session, ts)
+    errors += check_intrinsics(session)
+
     manifest_path = session / "manifest.json"
     if not manifest_path.exists():
         errors.append("manifest.json missing")
@@ -127,9 +133,76 @@ def check(session: Path) -> list[str]:
                 errors.append(f"manifest: {images['image_frame_timestamp_mismatches_over_5ms']} images more than "
                               "5 ms from their ARCore frame timestamp (probably a different frame)")
 
+        clock = m.get("clock_check") or {}
+        frame_age = clock.get("elapsed_realtime_minus_first_frame_timestamp_ns")
+        imu_age = clock.get("elapsed_realtime_minus_last_imu_timestamp_ns")
+        if frame_age is not None and imu_age is not None:
+            print(f"clock check: frame age {frame_age / 1e6:.1f} ms, IMU sample age {imu_age / 1e6:.1f} ms")
+            # Both are processing latencies on the same clock: expect 0..1 s. A clock mismatch
+            # shows up as seconds to days.
+            for name, age in (("frame", frame_age), ("IMU", imu_age)):
+                if not -0.05e9 < age < 1e9:
+                    errors.append(f"{name} timestamps are {age / 1e9:.3f} s from elapsedRealtime: "
+                                  "camera and IMU may not share a clock")
+        device_path = session / "device.json"
+        if device_path.exists():
+            source = json.loads(device_path.read_text()).get("camera", {}).get("timestamp_source")
+            print(f"camera timestamp source: {source}")
+            if source != "REALTIME":
+                errors.append(f"camera timestamp source is {source}, not REALTIME: verify camera/IMU alignment")
+
     for e in errors:
         print(f"FAIL: {e}")
     print("OK" if not errors else f"{len(errors)} problem(s)")
+    return errors
+
+
+def check_imu(session: Path, frame_ts: list[int]) -> list[str]:
+    path = session / "imu.csv"
+    if not path.exists():
+        return []  # posecam-1/2 sessions have no IMU
+    errors = []
+    by_sensor: dict[str, list[int]] = {}
+    with open(path, newline="") as f:
+        for r in csv.DictReader(f):
+            by_sensor.setdefault(r["sensor"], []).append(int(r["timestamp_ns"]))
+    if not by_sensor:
+        return ["imu.csv has no samples"]
+    for sensor, ts in by_sensor.items():
+        dt = [(b - a) / 1e6 for a, b in zip(ts, ts[1:])]
+        if not dt:
+            errors.append(f"imu {sensor}: only {len(ts)} sample")
+            continue
+        median = statistics.median(dt)
+        bad = sum(1 for d in dt if d <= 0)
+        gaps = sum(1 for d in dt if d > 5 * median)
+        rate = (len(ts) - 1) / ((ts[-1] - ts[0]) / 1e9)
+        print(f"imu {sensor}: {len(ts)} samples, {rate:.1f} Hz, median dt {median:.2f} ms, "
+              f"max dt {max(dt):.1f} ms, gaps >5x median: {gaps}, non-increasing: {bad}")
+        if bad:
+            errors.append(f"imu {sensor}: {bad} non-increasing timestamps")
+        if ts[0] > frame_ts[0] + 50_000_000 or ts[-1] < frame_ts[-1] - 50_000_000:
+            errors.append(f"imu {sensor} does not cover the frame time span "
+                          f"(starts {(ts[0] - frame_ts[0]) / 1e6:+.0f} ms, ends {(ts[-1] - frame_ts[-1]) / 1e6:+.0f} ms "
+                          "relative to frames)")
+    return errors
+
+
+def check_intrinsics(session: Path) -> list[str]:
+    path = session / "intrinsics.json"
+    if not path.exists():
+        return []  # posecam-1/2 sessions have no intrinsics.json
+    k = json.loads(path.read_text())
+    if not k.get("fx"):
+        return ["intrinsics.json has no values"]
+    print(f"intrinsics: {k['width']}x{k['height']} fx {k['fx']:.2f} fy {k['fy']:.2f} "
+          f"cx {k['cx']:.2f} cy {k['cy']:.2f} ({k.get('samples')} samples)")
+    errors = []
+    if not k.get("complete"):
+        errors.append("intrinsics.json not finalized")
+    if k.get("changed_during_recording"):
+        errors.append(f"intrinsics changed during recording (first at frame {k.get('first_change_frame_index')}, "
+                      f"end value {k.get('at_end')})")
     return errors
 
 
