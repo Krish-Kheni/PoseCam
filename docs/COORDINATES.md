@@ -1,0 +1,60 @@
+# Coordinate conventions
+
+Everything PoseCam records is raw ARCore output. Transform offline, never in the app.
+
+## World frame
+
+- **+Y is up**, aligned with gravity.
+- **−Z** is the horizontal direction the camera faced when the **ARCore session**
+  started, projected perpendicular to gravity.
+- **+X** follows from the right-hand rule.
+- Units are meters.
+
+The **origin is where the ARCore session started**. That's when the capture screen
+opened, **not** when Record was pressed. The first row of `poses.csv` is therefore
+generally not at `(0, 0, 0)`.
+
+Each app launch gets its own origin. Two recordings are only in a shared frame if
+they came from the same session (no app restart, no pause in between) or you align
+them yourself.
+
+## Pose
+
+Each row of `poses.csv` is `camera.getPose()` for that frame: the transform from the
+**physical camera sensor frame** to the world frame (`T_world_camera`).
+
+- Translation `(tx, ty, tz)` is the camera position in world coordinates.
+- Rotation `(qx, qy, qz, qw)` is a unit quaternion, Hamilton convention, scalar last.
+  SciPy: `Rotation.from_quat([qx, qy, qz, qw])` (scalar-last by default).
+- Camera frame (ARCore/OpenGL convention): **+X right, +Y up, −Z forward** (looking
+  direction), relative to the sensor's native landscape orientation. It does not
+  change with screen rotation. This differs from the OpenCV convention (+Y down,
+  +Z forward). To convert: `T_world_cv = T_world_camera · diag(1, −1, −1, 1)`.
+
+We deliberately do **not** use `getDisplayOrientedPose()`. It bakes in screen
+rotation and is only meant for rendering.
+
+Rotation is not identity at the start. Heading is zeroed to the initial facing
+direction, but pitch and roll are absolute against gravity.
+
+## Relative poses
+
+To express poses relative to the first recorded frame (offline):
+
+```
+T_rel[i] = inverse(T[0]) · T[i]
+```
+
+## Timestamps
+
+`timestamp_ns` is `Frame.getTimestamp()`: nanoseconds on the same clock as Camera2
+`SENSOR_TIMESTAMP` and Android sensor `event.timestamp`. It is not wall time and
+not comparable across devices or reboots. `manifest.json` records wall time for
+humans only.
+
+## Tracking
+
+Rows with `tracking_state` other than `TRACKING` have empty pose fields.
+`PAUSED:<reason>` carries ARCore's `TrackingFailureReason`. Poses can jump when ARCore
+relocalizes; this is logged as-is, so detect it offline by thresholding per-frame
+translation.
