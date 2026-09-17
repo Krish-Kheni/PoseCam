@@ -40,6 +40,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
     private lateinit var statusView: TextView
     private lateinit var recordButton: Button
     private lateinit var resolutionButton: Button
+    private lateinit var focusButton: Button
 
     @Volatile private var session: Session? = null
     private var sessionMetadata: Map<String, Any?> = emptyMap()
@@ -80,6 +81,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         statusView = findViewById(R.id.status)
         recordButton = findViewById(R.id.record)
         resolutionButton = findViewById(R.id.resolution)
+        focusButton = findViewById(R.id.focus)
 
         val root = getExternalFilesDir(null)
         if (root == null) {
@@ -107,6 +109,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
 
         recordButton.setOnClickListener { toggleRecording() }
         resolutionButton.setOnClickListener { cycleResolution() }
+        focusButton.setOnClickListener { toggleFocusMode() }
 
         if (ArCoreApk.getInstance().checkAvailability(this) == ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE) {
             fatal("This device does not support ARCore.")
@@ -173,8 +176,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             applyCameraConfig(newSession, CameraConfigs.select(newSession, width, height))
 
             newSession.configure(Config(newSession).apply {
-                // Fixed focus keeps intrinsics stable across the recording.
-                focusMode = Config.FocusMode.FIXED
+                focusMode = savedFocusMode()
                 updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
                 // Nothing below is needed for camera pose; disabling saves CPU and heat.
                 planeFindingMode = Config.PlaneFindingMode.DISABLED
@@ -201,11 +203,41 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         }
     }
 
+    /**
+     * FIXED keeps intrinsics constant but focuses at roughly 1 m, blurring close scenes.
+     * AUTO sharpens close range; refocusing can shift intrinsics, which intrinsics.json
+     * and frame_metadata.csv record so it is visible offline.
+     */
+    private fun savedFocusMode(): Config.FocusMode =
+        if (getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_AUTOFOCUS, false)) {
+            Config.FocusMode.AUTO
+        } else {
+            Config.FocusMode.FIXED
+        }
+
+    private fun applyFocusMode(session: Session, mode: Config.FocusMode) {
+        session.configure(session.config.apply { focusMode = mode })
+        focusButton.text = if (mode == Config.FocusMode.AUTO) "Focus: auto" else "Focus: fixed"
+        sessionMetadata = buildMetadata(session.cameraConfig)
+        Log.i(TAG, "Focus mode: $mode")
+    }
+
+    /** Never mid-recording: refocusing can change intrinsics. */
+    private fun toggleFocusMode() {
+        val session = session ?: return
+        if (recorder.isRecording) return
+        val next = if (savedFocusMode() == Config.FocusMode.AUTO) Config.FocusMode.FIXED else Config.FocusMode.AUTO
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putBoolean(PREF_AUTOFOCUS, next == Config.FocusMode.AUTO).apply()
+        applyFocusMode(session, next)
+    }
+
     /** Session must be paused (or not yet resumed). */
     private fun applyCameraConfig(session: Session, cameraConfig: CameraConfig) {
         session.cameraConfig = cameraConfig
         Log.i(TAG, "Chosen camera config: ${Json.write(CameraConfigs.describe(cameraConfig)).replace(Regex("\\s+"), " ")}")
         sessionMetadata = buildMetadata(cameraConfig)
+        applyFocusMode(session, savedFocusMode())
         deviceInfo = DeviceInfo.collect(this, cameraConfig.cameraId, imuSource.describe())
         val size = cameraConfig.imageSize.width to cameraConfig.imageSize.height
         currentSize = size
@@ -256,6 +288,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             "android_sdk" to Build.VERSION.SDK_INT,
         ),
         "camera_config" to CameraConfigs.describe(cameraConfig),
+        "focus_mode" to savedFocusMode().name,
         "pose_source" to "Camera.getPose",
         "timestamp_source" to "Frame.getTimestamp",
     )
@@ -422,6 +455,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             statusView.text = text
             recordButton.isEnabled = recording || armed
             resolutionButton.isEnabled = !recording && availableSizes.size > 1
+            focusButton.isEnabled = !recording
         }
     }
 
@@ -443,5 +477,6 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         const val PREFS = "posecam"
         const val PREF_WIDTH = "cpu_image_width"
         const val PREF_HEIGHT = "cpu_image_height"
+        const val PREF_AUTOFOCUS = "autofocus"
     }
 }
