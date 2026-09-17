@@ -59,6 +59,11 @@ T_rel[i] = inverse(T[0]) · T[i]
 not comparable across devices or reboots. `manifest.json` records wall time for
 humans only.
 
+Each JPEG is the camera image ARCore used for that frame's pose. Filenames carry
+the frame timestamp. The image's own `Image.getTimestamp()` differs from it by about
+a millisecond (−0.01 to +1.1 ms measured on an S20 FE), far below the 33 ms frame
+interval. `manifest.json` records the measured range per session.
+
 ## Tracking
 
 Rows with `tracking_state` other than `TRACKING` have empty pose fields.

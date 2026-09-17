@@ -19,6 +19,7 @@ object Json {
         }
         is Iterable<*> -> value.joinToString(", ", "[", "]") { write(it, indent) }
         is IntArray -> write(value.toList(), indent)
+        is LongArray -> write(value.toList(), indent)
         is FloatArray -> write(value.toList(), indent)
         else -> throw IllegalArgumentException("Unsupported JSON type: ${value::class}")
     }

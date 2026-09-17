@@ -119,9 +119,13 @@ def check(session: Path) -> list[str]:
         if images:
             if images.get("write_failures"):
                 errors.append(f"manifest: write failures {images['write_failures'][:5]} ({images.get('first_write_error')})")
-            if images.get("image_frame_timestamp_mismatches"):
-                errors.append(f"manifest: {images['image_frame_timestamp_mismatches']} images whose own timestamp "
-                              "differs from the ARCore frame timestamp")
+            delta = images.get("image_minus_frame_timestamp_ns_range")
+            if delta:
+                print(f"image timestamp - frame timestamp: {delta[0] / 1e6:+.3f} .. {delta[1] / 1e6:+.3f} ms")
+            # posecam-2 builds before the threshold existed counted any nonzero difference.
+            if images.get("image_frame_timestamp_mismatches_over_5ms"):
+                errors.append(f"manifest: {images['image_frame_timestamp_mismatches_over_5ms']} images more than "
+                              "5 ms from their ARCore frame timestamp (probably a different frame)")
 
     for e in errors:
         print(f"FAIL: {e}")

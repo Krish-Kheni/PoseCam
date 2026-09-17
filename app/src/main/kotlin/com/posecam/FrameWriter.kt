@@ -4,6 +4,7 @@ import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.abs
 
 /** Turns a camera image into a file. Runs on the writer thread only. */
 fun interface FrameEncoder {
@@ -22,13 +23,19 @@ class FrameWriter(
     data class Stats(
         val written: Long,
         val failedFrameIndices: List<Long>,
+        /** Images more than [MISMATCH_THRESHOLD_NS] from their frame timestamp: likely a different frame. */
         val timestampMismatches: Long,
+        /** Range of (image timestamp − frame timestamp) in ns, null if no frames. */
+        val imageMinusFrameNs: LongArray?,
         val firstError: String?,
     )
 
     private val executor = Executors.newSingleThreadExecutor { Thread(it, "PoseCam-FrameWriter") }
     private val written = AtomicLong()
     private val mismatches = AtomicLong()
+    // Only touched on the writer thread.
+    private var minDeltaNs = Long.MAX_VALUE
+    private var maxDeltaNs = Long.MIN_VALUE
     private val failed = mutableListOf<Long>()
     @Volatile private var firstError: String? = null
 
@@ -40,8 +47,12 @@ class FrameWriter(
     fun submit(frameIndex: Long, timestampNs: Long, buffer: YuvBuffer) {
         executor.execute {
             try {
-                // Filenames use the frame timestamp; the image should carry the same one.
-                if (buffer.timestampNs != timestampNs) mismatches.incrementAndGet()
+                // Filenames use the frame timestamp. The image's own timestamp differs by
+                // ~1 ms (measured on SM-G781B); anything near a frame interval is a wrong frame.
+                val delta = buffer.timestampNs - timestampNs
+                if (abs(delta) > MISMATCH_THRESHOLD_NS) mismatches.incrementAndGet()
+                minDeltaNs = minOf(minDeltaNs, delta)
+                maxDeltaNs = maxOf(maxDeltaNs, delta)
                 val name = fileName(frameIndex, timestampNs)
                 val tmp = File(framesDir, "$name.tmp")
                 encoder.encode(buffer, tmp)
@@ -60,10 +71,13 @@ class FrameWriter(
     fun finish(): Stats {
         executor.shutdown()
         check(executor.awaitTermination(60, TimeUnit.SECONDS)) { "Frame writer did not finish" }
-        return Stats(written.get(), synchronized(failed) { failed.toList() }, mismatches.get(), firstError)
+        val range = if (minDeltaNs <= maxDeltaNs) longArrayOf(minDeltaNs, maxDeltaNs) else null
+        return Stats(written.get(), synchronized(failed) { failed.toList() }, mismatches.get(), range, firstError)
     }
 
     companion object {
+        const val MISMATCH_THRESHOLD_NS = 5_000_000L
+
         fun fileName(frameIndex: Long, timestampNs: Long): String = "%06d_%d.jpg".format(frameIndex, timestampNs)
     }
 }

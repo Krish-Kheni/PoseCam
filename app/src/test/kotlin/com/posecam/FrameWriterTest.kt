@@ -28,12 +28,14 @@ class FrameWriterTest {
         val writer = FrameWriter(dir, { image, out -> out.writeText("ts=${image.timestampNs}") }, pool)
 
         writer.submit(0, 100, filled(pool, 100))
-        writer.submit(1, 133, filled(pool, 999)) // image timestamp disagrees with frame
+        writer.submit(1, 133_000_000, filled(pool, 134_000_000)) // 1 ms apart: same frame
+        writer.submit(2, 166_000_000, filled(pool, 199_000_000)) // a frame interval apart: wrong frame
         val stats = writer.finish()
 
-        assertEquals(2, stats.written)
+        assertEquals(3, stats.written)
         assertEquals(1, stats.timestampMismatches)
-        assertEquals(listOf("000000_100.jpg", "000001_133.jpg"), dir.list()!!.sorted())
+        assertEquals(listOf(0L, 33_000_000L), stats.imageMinusFrameNs!!.toList())
+        assertEquals(listOf("000000_100.jpg", "000001_133000000.jpg", "000002_166000000.jpg"), dir.list()!!.sorted())
         assertEquals(4, pool.available)
     }
 
