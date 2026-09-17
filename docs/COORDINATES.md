@@ -83,12 +83,30 @@ frames. Interpolate offline.
 
 `intrinsics.json` holds `Camera.getImageIntrinsics()` for the CPU image in `frames/`:
 `fx, fy, cx, cy` in pixels for `width × height`. It's a pinhole model, and ARCore
-reports no distortion coefficients. It is not yet verified whether the CPU image is
-undistorted. Camera2's factory `lens_distortion` and `lens_intrinsic_calibration`
-(for the full sensor array, not this image) are in `device.json` when the phone
-publishes them. On the S20 FE they show mild radial distortion (k1 ≈ 0.034), and a
-scaled focal length about 3% above ARCore's. Calibrate yourself if you need
-sub-pixel accuracy. Values
+reports no distortion coefficients.
+
+**Measured on the S20 FE (640×480, autofocus, checkerboard calibration,
+capture-20260917T175141, reprojection RMS 0.33 px, focal length stable to 0.2% across
+distortion models):**
+
+- The CPU image is **not** undistorted. Mild radial distortion, OpenCV coefficients
+  `k1 0.0149, k2 -0.0004, p1 0.0007, p2 0.0004, k3 0.0062`, displacing points by up to
+  ~5 px (3.8 px at the corner). Undistort for accurate projection; ignore it if a few
+  pixels do not matter.
+- Calibrated intrinsics `fx 503.8, fy 504.9, cx 330.2, cy 235.2` versus ARCore's
+  `fx 488.8, fy 489.6, cx 321.4, cy 231.7`: **ARCore reads about 3% low**.
+- **ARCore does not model focus breathing.** It reports one intrinsics value per session
+  while the true focal length changes with focus distance. Three well-conditioned fits:
+  fx 515 at 0.34 m focus, 504 at 0.37 m, 495 at 0.50 m. So with autofocus, treat
+  `intrinsics.json` as accurate to roughly 3%; for better, calibrate at your working
+  distance and use fixed focus there.
+- Camera2's factory `lens_distortion` and `lens_intrinsic_calibration` (for the full
+  sensor array) are in `device.json`; the scaled factory fx of 492 sits between ARCore's
+  and the calibration.
+
+Calibrate per phone model with `tools/calibrate_camera.py`. It needs strongly tilted
+views (the board must look like a trapezoid) with the board filling much of the frame;
+frontal views cannot separate focal length from distortion. Values
 are sampled about once a second; `changed_during_recording` must be `false` for them
 to apply to every frame.
 

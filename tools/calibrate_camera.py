@@ -231,7 +231,10 @@ def main():
     print("\nstability across distortion models (fx should barely move):")
     for label, flags in variants.items():
         v_rms, v_k, _, _, _ = cv2.calibrateCamera(object_points, image_points, size, None, None, flags=flags)
-        focals.append(v_k[0, 0])
+        # "no distortion" is a probe of how much distortion matters, not a candidate model,
+        # so it is reported but kept out of the conditioning test.
+        if label != "no distortion":
+            focals.append(v_k[0, 0])
         print(f"  {label:16s} RMS {v_rms:.3f} px, fx {v_k[0, 0]:.1f}")
     spread = 100 * (max(focals) - min(focals)) / np.mean(focals)
     print(f"image coverage {coverage:.0f}% of cells, fx spread across models {spread:.1f}%")
