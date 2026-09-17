@@ -11,7 +11,11 @@ import kotlin.math.abs
  * from different phones are comparable and the choice is written into every session.
  */
 object CameraConfigs {
-    /** Default CPU image size. Not final: to be locked after benchmarking (see CLAUDE.md). */
+    /**
+     * The team's locked CPU image size (see CLAUDE.md). 640x480 holds 30 fps on an
+     * S20 FE where 1280x720 drops frames. The in-app button can still change it for
+     * testing, but recordings at other sizes are not comparable.
+     */
     const val TARGET_WIDTH = 640
     const val TARGET_HEIGHT = 480
 

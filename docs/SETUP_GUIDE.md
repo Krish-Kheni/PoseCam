@@ -33,8 +33,9 @@ yourself (see README).
 
 ## 3. Use
 
-1. Open PoseCam. Keep the resolution button (bottom left) at the team's agreed size:
-   recordings at different sizes are not comparable.
+1. Open PoseCam. Keep the resolution button (bottom left) at **640×480** (the team's
+   locked size) and the focus button (bottom right) at **auto**. Recordings at other
+   sizes are not comparable: intrinsics differ.
 2. Move the phone slowly, pointing at textured things, until the status says
    **Ready to record**.
 3. **Record** → capture → **Stop**.
