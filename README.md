@@ -5,6 +5,7 @@ and IMU data, for robotics data collection. Local capture only.
 
 - Plan: [docs/PLAN.md](docs/PLAN.md)
 - Coordinate conventions: [docs/COORDINATES.md](docs/COORDINATES.md)
+- Setting up a new phone (install, checks): [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md)
 
 ## Build and install
 
