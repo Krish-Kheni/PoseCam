@@ -68,7 +68,10 @@ def check(session: Path) -> list[str]:
             window = []
             for start in range(0, int(duration), 30):
                 lo, hi = ts[0] + start * 10**9, ts[0] + (start + 30) * 10**9
-                window.append(sum(1 for t in ts if lo <= t < hi) / 30)
+                span = (min(hi, ts[-1]) - lo) / 1e9
+                if span < 5:  # ignore a short final window
+                    continue
+                window.append(sum(1 for t in ts if lo <= t < hi) / span)
             print("fps per 30 s window: " + " ".join(f"{w:.1f}" for w in window))
 
     tracked = sum(1 for r in rows if r["tracking_state"] == "TRACKING")
