@@ -43,6 +43,15 @@ object DeviceInfo {
         out["optical_stabilization_modes"] = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
         out["video_stabilization_modes"] = c.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)
         out["focal_lengths_mm"] = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+        // Diopters. Calibration tells whether they are metric (CALIBRATED/APPROXIMATE) or arbitrary.
+        out["minimum_focus_distance_diopters"] = c.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
+        out["hyperfocal_distance_diopters"] = c.get(CameraCharacteristics.LENS_INFO_HYPERFOCAL_DISTANCE)
+        out["focus_distance_calibration"] = when (c.get(CameraCharacteristics.LENS_INFO_FOCUS_DISTANCE_CALIBRATION)) {
+            CameraCharacteristics.LENS_INFO_FOCUS_DISTANCE_CALIBRATION_UNCALIBRATED -> "UNCALIBRATED"
+            CameraCharacteristics.LENS_INFO_FOCUS_DISTANCE_CALIBRATION_APPROXIMATE -> "APPROXIMATE"
+            CameraCharacteristics.LENS_INFO_FOCUS_DISTANCE_CALIBRATION_CALIBRATED -> "CALIBRATED"
+            else -> null
+        }
         c.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)?.let { out["sensor_physical_size_mm"] = floatArrayOf(it.width, it.height) }
         c.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)?.let { out["sensor_pixel_array_size"] = intArrayOf(it.width, it.height) }
         out["sensor_orientation_deg"] = c.get(CameraCharacteristics.SENSOR_ORIENTATION)

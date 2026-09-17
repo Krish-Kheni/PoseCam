@@ -11,21 +11,31 @@ import kotlin.math.abs
  * from different phones are comparable and the choice is written into every session.
  */
 object CameraConfigs {
-    /** Target CPU image size. Phase 2 encodes these frames, so keep them moderate. */
+    /** Default CPU image size. Not final: to be locked after benchmarking (see CLAUDE.md). */
     const val TARGET_WIDTH = 640
     const val TARGET_HEIGHT = 480
 
-    fun select(session: Session): CameraConfig {
-        val back = CameraConfigFilter(session).setFacingDirection(CameraConfig.FacingDirection.BACK)
+    /** Back camera, 30 fps, no depth sensor; falls back to any back-camera config. */
+    fun candidates(session: Session): List<CameraConfig> {
         val preferred = session.getSupportedCameraConfigs(
             CameraConfigFilter(session)
                 .setFacingDirection(CameraConfig.FacingDirection.BACK)
                 .setTargetFps(EnumSet.of(CameraConfig.TargetFps.TARGET_FPS_30))
                 .setDepthSensorUsage(EnumSet.of(CameraConfig.DepthSensorUsage.DO_NOT_USE))
         )
-        val candidates = preferred.ifEmpty { session.getSupportedCameraConfigs(back) }
+        return preferred.ifEmpty {
+            session.getSupportedCameraConfigs(CameraConfigFilter(session).setFacingDirection(CameraConfig.FacingDirection.BACK))
+        }
+    }
+
+    /** Distinct CPU image sizes offered by [candidates], smallest first. */
+    fun availableSizes(session: Session): List<Pair<Int, Int>> =
+        candidates(session).map { it.imageSize.width to it.imageSize.height }.distinct().sortedBy { it.first * it.second }
+
+    fun select(session: Session, width: Int = TARGET_WIDTH, height: Int = TARGET_HEIGHT): CameraConfig {
+        val candidates = candidates(session)
         check(candidates.isNotEmpty()) { "No back-camera configs available" }
-        val best = closestIndex(candidates.map { it.imageSize.width to it.imageSize.height })
+        val best = closestIndex(candidates.map { it.imageSize.width to it.imageSize.height }, width, height)
         return candidates[best]
     }
 

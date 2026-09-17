@@ -17,6 +17,7 @@ import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import com.google.ar.core.ArCoreApk
+import com.google.ar.core.CameraConfig
 import com.google.ar.core.CameraConfigFilter
 import com.google.ar.core.Config
 import com.google.ar.core.Session
@@ -38,6 +39,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
     private lateinit var surfaceView: GLSurfaceView
     private lateinit var statusView: TextView
     private lateinit var recordButton: Button
+    private lateinit var resolutionButton: Button
 
     @Volatile private var session: Session? = null
     private var sessionMetadata: Map<String, Any?> = emptyMap()
@@ -55,6 +57,10 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
 
     /** SystemClock.elapsedRealtimeNanos() minus the first recorded frame's timestamp. */
     @Volatile private var firstFrameAgeNs: Long? = null
+    private var availableSizes: List<Pair<Int, Int>> = emptyList()
+    private var currentSize: Pair<Int, Int>? = null
+    /** Set when the camera config changes; the GL thread re-arms the tracking gate. */
+    @Volatile private var resetTrackingGate = false
 
     // GL thread state.
     private var textureBoundTo: Session? = null
@@ -73,6 +79,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         surfaceView = findViewById(R.id.surface)
         statusView = findViewById(R.id.status)
         recordButton = findViewById(R.id.record)
+        resolutionButton = findViewById(R.id.resolution)
 
         val root = getExternalFilesDir(null)
         if (root == null) {
@@ -99,6 +106,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         surfaceView.setWillNotDraw(false)
 
         recordButton.setOnClickListener { toggleRecording() }
+        resolutionButton.setOnClickListener { cycleResolution() }
 
         if (ArCoreApk.getInstance().checkAvailability(this) == ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE) {
             fatal("This device does not support ARCore.")
@@ -160,9 +168,9 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
 
             val newSession = Session(this)
             logSupportedCameraConfigs(newSession)
-            val cameraConfig = CameraConfigs.select(newSession)
-            newSession.cameraConfig = cameraConfig
-            Log.i(TAG, "Chosen camera config: ${Json.write(CameraConfigs.describe(cameraConfig)).replace(Regex("\\s+"), " ")}")
+            availableSizes = CameraConfigs.availableSizes(newSession)
+            val (width, height) = savedSize()
+            applyCameraConfig(newSession, CameraConfigs.select(newSession, width, height))
 
             newSession.configure(Config(newSession).apply {
                 // Fixed focus keeps intrinsics stable across the recording.
@@ -176,8 +184,6 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
                 cloudAnchorMode = Config.CloudAnchorMode.DISABLED
             })
 
-            sessionMetadata = buildMetadata(cameraConfig)
-            deviceInfo = DeviceInfo.collect(this, cameraConfig.cameraId, imuSource.describe())
             session = newSession
             return true
         } catch (e: UnavailableException) {
@@ -195,13 +201,51 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         }
     }
 
+    /** Session must be paused (or not yet resumed). */
+    private fun applyCameraConfig(session: Session, cameraConfig: CameraConfig) {
+        session.cameraConfig = cameraConfig
+        Log.i(TAG, "Chosen camera config: ${Json.write(CameraConfigs.describe(cameraConfig)).replace(Regex("\\s+"), " ")}")
+        sessionMetadata = buildMetadata(cameraConfig)
+        deviceInfo = DeviceInfo.collect(this, cameraConfig.cameraId, imuSource.describe())
+        val size = cameraConfig.imageSize.width to cameraConfig.imageSize.height
+        currentSize = size
+        resolutionButton.text = "${size.first}×${size.second}"
+        resolutionButton.isEnabled = availableSizes.size > 1
+    }
+
+    private fun savedSize(): Pair<Int, Int> {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        return prefs.getInt(PREF_WIDTH, CameraConfigs.TARGET_WIDTH) to prefs.getInt(PREF_HEIGHT, CameraConfigs.TARGET_HEIGHT)
+    }
+
+    /** Switches to the next CPU image size. Intrinsics change with it, so never mid-recording. */
+    private fun cycleResolution() {
+        val session = session ?: return
+        if (recorder.isRecording || availableSizes.size < 2) return
+        val next = availableSizes[(availableSizes.indexOf(currentSize) + 1) % availableSizes.size]
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putInt(PREF_WIDTH, next.first).putInt(PREF_HEIGHT, next.second).apply()
+
+        surfaceView.onPause()
+        session.pause()
+        applyCameraConfig(session, CameraConfigs.select(session, next.first, next.second))
+        resetTrackingGate = true
+        try {
+            session.resume()
+        } catch (e: CameraNotAvailableException) {
+            showStatus("Camera not available. Close other camera apps and reopen PoseCam.")
+            return
+        }
+        surfaceView.onResume()
+    }
+
     private fun logSupportedCameraConfigs(session: Session) {
         for (config in session.getSupportedCameraConfigs(CameraConfigFilter(session))) {
             Log.i(TAG, "Supported camera config (${config.facingDirection}): ${Json.write(CameraConfigs.describe(config)).replace(Regex("\\s+"), " ")}")
         }
     }
 
-    private fun buildMetadata(cameraConfig: com.google.ar.core.CameraConfig): Map<String, Any?> = linkedMapOf(
+    private fun buildMetadata(cameraConfig: CameraConfig): Map<String, Any?> = linkedMapOf(
         "app_version" to packageVersion(packageName),
         "arcore_version" to packageVersion("com.google.ar.core"),
         "device" to linkedMapOf(
@@ -228,8 +272,9 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             stopRecording()
         } else {
             try {
+                val pressedNs = SystemClock.elapsedRealtimeNanos()
                 firstFrameAgeNs = null
-                val dir = recorder.start(sessionMetadata, deviceInfo)
+                val dir = recorder.start(sessionMetadata, deviceInfo, pressedNs)
                 imuRecorder.start(dir)
                 Log.i(TAG, "Recording started: $dir")
                 recordButton.text = getString(R.string.stop)
@@ -336,12 +381,13 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
                 recorder.onIntrinsics(Intrinsics(f[0], f[1], c[0], c[1], size[0], size[1]))
             }
             val image = imageGrabber.grab(frame)
+            val metadata = FrameMetadataReader.read(frame)
             if (state == TrackingState.TRACKING) {
                 // Physical camera pose, not the display-oriented one.
                 val pose = camera.pose
-                recorder.onFrame(timestampNs, stateLabel, pose.translation, pose.rotationQuaternion, image)
+                recorder.onFrame(timestampNs, stateLabel, pose.translation, pose.rotationQuaternion, image, metadata)
             } else {
-                recorder.onFrame(timestampNs, stateLabel, null, null, image)
+                recorder.onFrame(timestampNs, stateLabel, null, null, image, metadata)
             }
         }
 
@@ -350,6 +396,10 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             lastLoggedState = stateLabel
         }
 
+        if (resetTrackingGate) {
+            resetTrackingGate = false
+            trackingGate.update(false, timestampNs)
+        }
         val armed = trackingGate.update(state == TrackingState.TRACKING, timestampNs)
         if (timestampNs - lastUiUpdateTimestampNs >= UI_UPDATE_INTERVAL_NS) {
             lastUiUpdateTimestampNs = timestampNs
@@ -371,6 +421,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         runOnUiThread {
             statusView.text = text
             recordButton.isEnabled = recording || armed
+            resolutionButton.isEnabled = !recording && availableSizes.size > 1
         }
     }
 
@@ -389,5 +440,8 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         const val CAMERA_PERMISSION_REQUEST = 1
         const val UI_UPDATE_INTERVAL_NS = 200_000_000L
         const val JPEG_QUALITY = 90
+        const val PREFS = "posecam"
+        const val PREF_WIDTH = "cpu_image_width"
+        const val PREF_HEIGHT = "cpu_image_height"
     }
 }

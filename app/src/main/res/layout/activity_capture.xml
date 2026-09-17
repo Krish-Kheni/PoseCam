@@ -29,4 +29,13 @@
         android:enabled="false"
         android:minWidth="160dp"
         android:text="@string/record" />
+    <Button
+        android:id="@+id/resolution"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|start"
+        android:layout_marginStart="16dp"
+        android:layout_marginBottom="48dp"
+        android:enabled="false"
+        android:textAllCaps="false" />
 </FrameLayout>

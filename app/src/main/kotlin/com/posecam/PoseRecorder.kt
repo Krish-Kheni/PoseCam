@@ -9,8 +9,8 @@ import java.util.Locale
 import java.util.TimeZone
 
 /**
- * Writes one capture session: poses.csv, frames/, intrinsics.json, device.json and
- * manifest.json. (imu.csv is written alongside by [ImuRecorder].)
+ * Writes one capture session: poses.csv, frame_metadata.csv, frames/, intrinsics.json,
+ * device.json and manifest.json. (imu.csv is written alongside by [ImuRecorder].)
  *
  * Thread-safe: frames arrive on the GL thread, start/stop come from the UI thread.
  */
@@ -27,6 +27,9 @@ class PoseRecorder(
 
     private val lock = Any()
     private var writer: BufferedWriter? = null
+    private var metadataWriter: BufferedWriter? = null
+    private val metadataSummary = FrameMetadataSummary()
+    private var recordPressedElapsedNs: Long? = null
     private var frameWriter: FrameWriter? = null
     private var directory: File? = null
     private var sessionId = ""
@@ -86,6 +89,7 @@ class PoseRecorder(
     fun start(
         metadata: Map<String, Any?>,
         device: Map<String, Any?> = emptyMap(),
+        recordPressedElapsedRealtimeNs: Long? = null,
         wallTimeMs: Long = System.currentTimeMillis(),
     ): File = synchronized(lock) {
         check(writer == null) { "Already recording" }
@@ -107,11 +111,17 @@ class PoseRecorder(
         intrinsics.reset()
         lastIntrinsicsFrame = -1
         extraMetadata = emptyMap()
+        recordPressedElapsedNs = recordPressedElapsedRealtimeNs
+        metadataSummary.reset()
 
         File(dir, "device.json").writeText(Json.write(device) + "\n")
         frameWriter = FrameWriter(File(dir, "frames"), encoder, pool)
         writer = File(dir, "poses.csv").bufferedWriter(bufferSize = 64 * 1024).apply {
             write(PoseCsv.HEADER)
+            newLine()
+        }
+        metadataWriter = File(dir, "frame_metadata.csv").bufferedWriter(bufferSize = 64 * 1024).apply {
+            write(FrameMetadata.HEADER)
             newLine()
         }
         // Written now as well as at stop, so a crash still leaves a self-describing folder.
@@ -125,6 +135,7 @@ class PoseRecorder(
      */
     fun onFrame(
         timestampNs: Long, trackingState: String, translation: FloatArray?, rotation: FloatArray?, image: FrameImage,
+        metadata: FrameMetadata? = null,
     ) {
         synchronized(lock) {
             val out = writer
@@ -155,12 +166,18 @@ class PoseRecorder(
             }
             out.write(row)
             out.newLine()
+            metadataWriter?.let {
+                it.write(FrameMetadata.row(frameCount, timestampNs, metadata))
+                it.newLine()
+            }
+            metadataSummary.add(metadata)
 
             if (firstTimestampNs == null) firstTimestampNs = timestampNs
             lastTimestampNs = timestampNs
             frameCount++
             if (++rowsSinceFlush >= FLUSH_EVERY_ROWS) {
                 out.flush()
+                metadataWriter?.flush()
                 rowsSinceFlush = 0
             }
         }
@@ -175,6 +192,8 @@ class PoseRecorder(
             val out = writer ?: return null
             out.close()
             writer = null
+            metadataWriter?.close()
+            metadataWriter = null
             frameWriter.also { frameWriter = null }!!
         }
         // Outside the lock: the GL thread must not wait on JPEG encoding.
@@ -213,7 +232,11 @@ class PoseRecorder(
             "tracked_frame_count" to trackedCount,
             "first_timestamp_ns" to firstTimestampNs,
             "last_timestamp_ns" to lastTimestampNs,
+            // Tap time on the frame/IMU clock. Row 0 of poses.csv is the first frame the app
+            // received after it, which was exposed up to ~100 ms earlier.
+            "record_pressed_elapsed_realtime_ns" to recordPressedElapsedNs,
             "images" to images,
+            "capture_metadata" to metadataSummary.toJson(),
         )
         manifest["intrinsics_changed_during_recording"] = intrinsics.distinctValues > 1
         manifest.putAll(baseMetadata)
@@ -226,7 +249,7 @@ class PoseRecorder(
     }
 
     companion object {
-        const val FORMAT_VERSION = "posecam-3"
+        const val FORMAT_VERSION = "posecam-4"
         private const val INTRINSICS_EVERY_FRAMES = 30
         private const val FLUSH_EVERY_ROWS = 100
         private val random = SecureRandom()
