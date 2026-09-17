@@ -8,7 +8,9 @@ Usage:
     uv run tools/calibrate_camera.py data/capture-XXXX --pattern 9x6 --square 0.025
 
 Record ~30 s slowly moving a printed checkerboard's view across the whole image,
-especially the corners and edges, at several tilts. --pattern counts INNER corners
+especially the corners and edges, at several tilts (30-45 degrees), with the whole
+board in view and in focus. Calibrate with the same resolution AND focus mode as the
+data it applies to. --pattern counts INNER corners
 (a board of 10x7 squares has 9x6 inner corners).
 
 Answers two questions:
@@ -29,6 +31,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from posecam_io import frame_path, load_json, load_poses  # noqa: E402
 
 
+MAX_RELIABLE_RMS_PX = 1.0
+
+
 def camera2_to_opencv(d: list[float]) -> np.ndarray:
     """Camera2 LENS_DISTORTION [k1, k2, k3, p1, p2] -> OpenCV [k1, k2, p1, p2, k3].
     Both map undistorted normalized coordinates to distorted ones with the same terms."""
@@ -37,11 +42,12 @@ def camera2_to_opencv(d: list[float]) -> np.ndarray:
 
 
 def corner_displacement(k: np.ndarray, dist: np.ndarray, w: int, h: int) -> float:
-    """Pixel shift that distortion causes at the image corner (0,0), relative to pinhole."""
+    """Pixel shift that distortion causes for a ray that a pinhole camera images at the
+    image corner (0,0). Forward model only, so it is well defined for any coefficients."""
     fx, fy, cx, cy = k[0, 0], k[1, 1], k[0, 2], k[1, 2]
-    undist = cv2.undistortPoints(np.array([[[0.0, 0.0]]]), k, dist)[0, 0]
-    ideal = np.array([cx + fx * undist[0], cy + fy * undist[1]])
-    return float(np.linalg.norm(ideal - [0.0, 0.0]))
+    ray = np.array([[(0 - cx) / fx, (0 - cy) / fy, 1.0]])
+    distorted, _ = cv2.projectPoints(ray, np.zeros(3), np.zeros(3), k, dist)
+    return float(np.linalg.norm(distorted.ravel()))
 
 
 def factory_intrinsics(camera: dict, w: int, h: int) -> np.ndarray | None:
@@ -121,6 +127,11 @@ def main():
             print(f"  corner displacement from factory distortion: {corner_displacement(fk, factory, w, h):.1f} px")
 
     fitted_px = corner_displacement(k, dist, w, h)
+    if rms > MAX_RELIABLE_RMS_PX:
+        print(f"\nverdict: UNRELIABLE (reprojection RMS {rms:.2f} px > {MAX_RELIABLE_RMS_PX} px). Usual causes: "
+              "blurry board (out of focus or motion), board partly outside the frame, too few tilted views, "
+              "corners and edges of the image not covered. Record again; ignore the numbers above.")
+        sys.exit(1)
     print("\nverdict:", "image looks UNDISTORTED (corner shift < 1 px)" if fitted_px < 1.0 else
           f"image is DISTORTED ({fitted_px:.1f} px at the corner): undistort with the fitted coefficients")
 
