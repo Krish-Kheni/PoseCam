@@ -27,15 +27,23 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ```bash
 tools/pull_captures.sh                          # copies sessions into ./data/
+uv run tools/check_sync.py data/capture-…      # timing + pose/image consistency checks
 uv run tools/plot_trajectory.py data/capture-…  # stats + plot (--save writes trajectory.png)
 ```
 
-## Output (format `posecam-1`)
+## Output (format `posecam-2`)
 
 ```
 capture-20260916T213140-9c433c/
-├── poses.csv       frame_index,timestamp_ns,tx,ty,tz,qx,qy,qz,qw,tracking_state
-└── manifest.json   session info, device, ARCore version, camera config
+├── frames/         000000_<timestamp_ns>.jpg, ...
+├── poses.csv       frame_index,timestamp_ns,tx,ty,tz,qx,qy,qz,qw,tracking_state,image
+└── manifest.json   session info, device, ARCore version, camera config, image stats
 ```
 
-One row per distinct camera frame, including untracked frames (empty pose fields).
+- One row per distinct camera frame, including untracked frames (empty pose fields).
+- `image` is `saved` (a JPEG named `{frame_index:06d}_{timestamp_ns}.jpg` exists) or
+  `dropped:<reason>`: `queue_full` (encoder falling behind), `not_yet_available`,
+  `deadline_exceeded`, `resources_exhausted`.
+- Images are the camera's CPU image in sensor-native orientation (landscape, not
+  rotated for the screen), matching the orientation of the camera pose.
+- `posecam-1` (pose-only) sessions have no `image` column and no `frames/`.

@@ -9,22 +9,33 @@ import java.util.Locale
 import java.util.TimeZone
 
 /**
- * Writes one capture session: a folder containing poses.csv and manifest.json.
+ * Writes one capture session: poses.csv, frames/ and manifest.json.
  *
  * Thread-safe: frames arrive on the GL thread, start/stop come from the UI thread.
  */
-class PoseRecorder(private val capturesRoot: File) {
+class PoseRecorder(
+    private val capturesRoot: File,
+    private val encoder: FrameEncoder,
+    private val imageMetadata: Map<String, Any?> = emptyMap(),
+    poolSize: Int = 8,
+) {
+    data class Summary(val directory: File, val frameCount: Long, val imagesSaved: Long, val imagesDropped: Long)
 
-    data class Summary(val directory: File, val frameCount: Long)
+    /** Buffers for image capture; the GL thread grabs from here. */
+    val pool = BufferPool(poolSize)
 
     private val lock = Any()
     private var writer: BufferedWriter? = null
+    private var frameWriter: FrameWriter? = null
     private var directory: File? = null
     private var sessionId = ""
     private var startWallTime = ""
     private var baseMetadata: Map<String, Any?> = emptyMap()
     private var frameCount = 0L
     private var trackedCount = 0L
+    private var imagesQueued = 0L
+    private val droppedByReason = linkedMapOf<String, Long>()
+    private var writerStats: FrameWriter.Stats? = null
     private var firstTimestampNs: Long? = null
     private var lastTimestampNs: Long? = null
     private var rowsSinceFlush = 0
@@ -33,12 +44,23 @@ class PoseRecorder(private val capturesRoot: File) {
 
     val recordedFrames: Long get() = synchronized(lock) { frameCount }
 
+    val droppedImages: Long get() = synchronized(lock) { droppedByReason.values.sum() }
+
     /** Duration covered so far, from frame timestamps. */
     val recordedDurationNs: Long
         get() = synchronized(lock) {
             val first = firstTimestampNs ?: return 0L
             (lastTimestampNs ?: first) - first
         }
+
+    /**
+     * True if a frame with this timestamp would be recorded. The GL thread checks this
+     * before acquiring the camera image, so nothing is grabbed while idle or for a
+     * repeated frame (the renderer can run faster than the camera).
+     */
+    fun wantsFrame(timestampNs: Long): Boolean = synchronized(lock) {
+        writer != null && lastTimestampNs.let { it == null || timestampNs > it }
+    }
 
     /** [metadata] is merged into manifest.json (device, app and camera details). */
     fun start(metadata: Map<String, Any?>, wallTimeMs: Long = System.currentTimeMillis()): File = synchronized(lock) {
@@ -52,10 +74,14 @@ class PoseRecorder(private val capturesRoot: File) {
         baseMetadata = metadata
         frameCount = 0
         trackedCount = 0
+        imagesQueued = 0
+        droppedByReason.clear()
+        writerStats = null
         firstTimestampNs = null
         lastTimestampNs = null
         rowsSinceFlush = 0
 
+        frameWriter = FrameWriter(File(dir, "frames"), encoder, pool)
         writer = File(dir, "poses.csv").bufferedWriter(bufferSize = 64 * 1024).apply {
             write(PoseCsv.HEADER)
             newLine()
@@ -67,20 +93,37 @@ class PoseRecorder(private val capturesRoot: File) {
 
     /**
      * Records one camera frame. [translation]/[rotation] must be non-null exactly when
-     * [trackingState] is "TRACKING". Repeated timestamps (the renderer can run faster
-     * than the camera) are ignored so each row is a distinct image.
+     * tracking. Takes ownership of a captured image buffer in every case.
      */
-    fun onFrame(timestampNs: Long, trackingState: String, translation: FloatArray?, rotation: FloatArray?) {
+    fun onFrame(
+        timestampNs: Long, trackingState: String, translation: FloatArray?, rotation: FloatArray?, image: FrameImage,
+    ) {
         synchronized(lock) {
-            val out = writer ?: return
+            val out = writer
+            val frames = frameWriter
             val last = lastTimestampNs
-            if (last != null && timestampNs <= last) return
+            if (out == null || frames == null || (last != null && timestampNs <= last)) {
+                if (image is FrameImage.Captured) pool.release(image.buffer)
+                return
+            }
+
+            val imageStatus = when (image) {
+                is FrameImage.Captured -> {
+                    frames.submit(frameCount, timestampNs, image.buffer)
+                    imagesQueued++
+                    PoseCsv.IMAGE_SAVED
+                }
+                is FrameImage.Dropped -> {
+                    droppedByReason[image.reason] = (droppedByReason[image.reason] ?: 0L) + 1
+                    PoseCsv.droppedImage(image.reason)
+                }
+            }
 
             val row = if (translation != null && rotation != null) {
                 trackedCount++
-                PoseCsv.trackedRow(frameCount, timestampNs, translation, rotation)
+                PoseCsv.trackedRow(frameCount, timestampNs, translation, rotation, imageStatus)
             } else {
-                PoseCsv.untrackedRow(frameCount, timestampNs, trackingState)
+                PoseCsv.untrackedRow(frameCount, timestampNs, trackingState, imageStatus)
             }
             out.write(row)
             out.newLine()
@@ -95,15 +138,37 @@ class PoseRecorder(private val capturesRoot: File) {
         }
     }
 
-    fun stop(wallTimeMs: Long = System.currentTimeMillis()): Summary? = synchronized(lock) {
-        val out = writer ?: return null
-        out.close()
-        writer = null
-        writeManifest(isoUtc(wallTimeMs))
-        Summary(directory!!, frameCount)
+    /** Stops recording and waits for queued frames to be written. Call from the UI thread. */
+    fun stop(wallTimeMs: Long = System.currentTimeMillis()): Summary? {
+        val frames = synchronized(lock) {
+            val out = writer ?: return null
+            out.close()
+            writer = null
+            frameWriter.also { frameWriter = null }!!
+        }
+        // Outside the lock: the GL thread must not wait on JPEG encoding.
+        val stats = frames.finish()
+        return synchronized(lock) {
+            writerStats = stats
+            writeManifest(isoUtc(wallTimeMs))
+            Summary(directory!!, frameCount, stats.written, droppedByReason.values.sum() + stats.failedFrameIndices.size)
+        }
     }
 
     private fun writeManifest(stopWallTime: String?) {
+        val stats = writerStats
+        val images = linkedMapOf<String, Any?>(
+            "directory" to "frames",
+            "filename_pattern" to "{frame_index:06d}_{timestamp_ns}.jpg",
+        )
+        images.putAll(imageMetadata)
+        images["queued"] = imagesQueued
+        images["written"] = stats?.written
+        images["dropped"] = LinkedHashMap(droppedByReason)
+        images["write_failures"] = stats?.failedFrameIndices
+        images["first_write_error"] = stats?.firstError
+        images["image_frame_timestamp_mismatches"] = stats?.timestampMismatches
+
         val manifest = linkedMapOf<String, Any?>(
             "format_version" to FORMAT_VERSION,
             "session_id" to sessionId,
@@ -114,13 +179,14 @@ class PoseRecorder(private val capturesRoot: File) {
             "tracked_frame_count" to trackedCount,
             "first_timestamp_ns" to firstTimestampNs,
             "last_timestamp_ns" to lastTimestampNs,
+            "images" to images,
         )
         manifest.putAll(baseMetadata)
         File(directory, "manifest.json").writeText(Json.write(manifest) + "\n")
     }
 
     companion object {
-        const val FORMAT_VERSION = "posecam-1"
+        const val FORMAT_VERSION = "posecam-2"
         private const val FLUSH_EVERY_ROWS = 100
         private val random = SecureRandom()
 

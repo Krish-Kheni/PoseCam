@@ -37,6 +37,13 @@ rotation and is only meant for rendering.
 Rotation is not identity at the start. Heading is zeroed to the initial facing
 direction, but pitch and roll are absolute against gravity.
 
+## Images
+
+JPEGs in `frames/` are the ARCore CPU image in the sensor's native orientation
+(landscape, as read out), not rotated for the screen. Image +X (columns) and +Y
+(rows, downward) align with the camera frame's +X and −Y, so projecting a world
+point with the pose and intrinsics needs no extra rotation for display.
+
 ## Relative poses
 
 To express poses relative to the first recorded frame (offline):

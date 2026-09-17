@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
+# posecam-1 had these columns; posecam-2 appends "image".
 COLUMNS = ["frame_index", "timestamp_ns", "tx", "ty", "tz", "qx", "qy", "qz", "qw", "tracking_state"]
 
 
@@ -27,7 +28,7 @@ def load_poses(session: Path):
     with open(session / "poses.csv", newline="") as f:
         reader = csv.reader(f)
         header = next(reader)
-        if header != COLUMNS:
+        if header[: len(COLUMNS)] != COLUMNS:
             sys.exit(f"Unexpected poses.csv header: {header}")
         rows = list(reader)
     index = np.array([int(r[0]) for r in rows])

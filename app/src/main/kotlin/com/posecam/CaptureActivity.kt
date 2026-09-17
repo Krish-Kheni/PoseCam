@@ -47,6 +47,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
     private lateinit var recorder: PoseRecorder
     private val backgroundRenderer = BackgroundRenderer()
     private val trackingGate = TrackingGate()
+    private lateinit var imageGrabber: ImageGrabber
 
     // GL thread state.
     private var textureBoundTo: Session? = null
@@ -71,7 +72,16 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             fatal("External storage is unavailable.")
             return
         }
-        recorder = PoseRecorder(File(root, "captures"))
+        recorder = PoseRecorder(
+            File(root, "captures"),
+            JpegEncoder(JPEG_QUALITY),
+            imageMetadata = mapOf(
+                "format" to "jpeg",
+                "jpeg_quality" to JPEG_QUALITY,
+                "orientation" to "sensor native, not rotated for display",
+            ),
+        )
+        imageGrabber = ImageGrabber(recorder.pool)
 
         surfaceView.preserveEGLContextOnPause = true
         surfaceView.setEGLContextClientVersion(2)
@@ -218,9 +228,13 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
     }
 
     private fun onRecordingStopped(summary: PoseRecorder.Summary) {
-        Log.i(TAG, "Recording stopped: ${summary.directory} (${summary.frameCount} frames)")
+        Log.i(TAG, "Recording stopped: $summary")
         recordButton.text = getString(R.string.record)
-        Toast.makeText(this, "Saved ${summary.frameCount} frames to ${summary.directory.name}", Toast.LENGTH_LONG).show()
+        Toast.makeText(
+            this,
+            "Saved ${summary.frameCount} poses, ${summary.imagesSaved} images (${summary.imagesDropped} dropped)",
+            Toast.LENGTH_LONG,
+        ).show()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -285,12 +299,15 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             else -> state.name
         }
 
-        if (state == TrackingState.TRACKING) {
-            // Physical camera pose, not the display-oriented one.
-            val pose = camera.pose
-            recorder.onFrame(timestampNs, stateLabel, pose.translation, pose.rotationQuaternion)
-        } else {
-            recorder.onFrame(timestampNs, stateLabel, null, null)
+        if (recorder.wantsFrame(timestampNs)) {
+            val image = imageGrabber.grab(frame)
+            if (state == TrackingState.TRACKING) {
+                // Physical camera pose, not the display-oriented one.
+                val pose = camera.pose
+                recorder.onFrame(timestampNs, stateLabel, pose.translation, pose.rotationQuaternion, image)
+            } else {
+                recorder.onFrame(timestampNs, stateLabel, null, null, image)
+            }
         }
 
         if (stateLabel != lastLoggedState) {
@@ -308,10 +325,11 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
     private fun updateUi(state: TrackingState, reason: TrackingFailureReason, armed: Boolean) {
         val recording = recorder.isRecording
         val frames = recorder.recordedFrames
+        val dropped = recorder.droppedImages
         val seconds = recorder.recordedDurationNs / 1e9
         val tracking = if (state == TrackingState.PAUSED && reason != TrackingFailureReason.NONE) "PAUSED ($reason)" else state.name
         val text = when {
-            recording -> "● REC  %.1f s  ·  %d frames\nTracking: %s".format(seconds, frames, tracking)
+            recording -> "● REC  %.1f s  ·  %d frames  ·  %d dropped\nTracking: %s".format(seconds, frames, dropped, tracking)
             armed -> "Ready to record\nTracking: $tracking"
             else -> "Move the phone slowly to start tracking…\nTracking: $tracking"
         }
@@ -335,5 +353,6 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         const val TAG = "PoseCam"
         const val CAMERA_PERMISSION_REQUEST = 1
         const val UI_UPDATE_INTERVAL_NS = 200_000_000L
+        const val JPEG_QUALITY = 90
     }
 }
