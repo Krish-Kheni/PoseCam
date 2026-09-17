@@ -92,9 +92,23 @@ sub-pixel accuracy. Values
 are sampled about once a second; `changed_during_recording` must be `false` for them
 to apply to every frame.
 
+## Per-frame capture metadata
+
+`frame_metadata.csv` has one row per `poses.csv` row, from ARCore's
+`Frame.getImageMetadata()` (Camera2 capture results):
+
+- `exposure_time_ns`, `frame_duration_ns`, `sensitivity_iso`.
+- `rolling_shutter_skew_ns`: time from the first to the last row readout. The frame
+  timestamp refers to the start of exposure of the first row.
+- `focus_distance_diopters`: 1/m, 0 = infinity. It's metric only when `device.json` →
+  `camera.focus_distance_calibration` is `APPROXIMATE` or `CALIBRATED`.
+- `ois_mode`: 1 means optical stabilization was on for that frame. The lens then moves
+  the optical axis, and `intrinsics.json` cannot describe it.
+
 ## Relative poses
 
-To express poses relative to the first recorded frame (offline):
+To express poses relative to the first recorded frame (offline). Row 0 is the first
+frame received after the Record tap (`manifest.json` → `record_pressed_elapsed_realtime_ns`):
 
 ```
 T_rel[i] = inverse(T[0]) · T[i]

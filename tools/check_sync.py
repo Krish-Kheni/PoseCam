@@ -16,6 +16,7 @@ Checks:
   - imu.csv: per-sensor rate, gaps, non-increasing timestamps, coverage of the frame span
   - intrinsics.json exists and did not change during the recording
   - camera and IMU timestamps look like the same clock
+  - frame_metadata.csv: one row per frame, OIS state, focus distance, exposure
 Exit status is non-zero if any check fails.
 """
 
@@ -107,6 +108,7 @@ def check(session: Path) -> list[str]:
             total = sum(p.stat().st_size for _, p in files.values())
             print(f"jpeg total {total / 1e6:.1f} MB, mean {total / len(files) / 1e3:.0f} kB")
 
+    errors += check_frame_metadata(session, ts)
     errors += check_imu(session, ts)
     errors += check_intrinsics(session)
 
@@ -185,6 +187,38 @@ def check_imu(session: Path, frame_ts: list[int]) -> list[str]:
             errors.append(f"imu {sensor} does not cover the frame time span "
                           f"(starts {(ts[0] - frame_ts[0]) / 1e6:+.0f} ms, ends {(ts[-1] - frame_ts[-1]) / 1e6:+.0f} ms "
                           "relative to frames)")
+    return errors
+
+
+def check_frame_metadata(session: Path, frame_ts: list[int]) -> list[str]:
+    path = session / "frame_metadata.csv"
+    if not path.exists():
+        return []  # before posecam-4
+    with open(path, newline="") as f:
+        rows = list(csv.DictReader(f))
+    errors = []
+    if [int(r["timestamp_ns"]) for r in rows] != frame_ts:
+        errors.append("frame_metadata.csv rows do not match poses.csv timestamps")
+
+    def values(col, cast=float):
+        return [cast(r[col]) for r in rows if r[col] != ""]
+
+    ois = values("ois_mode", int)
+    focus = values("focus_distance_diopters")
+    exposure = values("exposure_time_ns", int)
+    skew = values("rolling_shutter_skew_ns", int)
+    print(f"frame metadata: {len(rows)} rows, OIS on in {sum(1 for v in ois if v)}/{len(ois)} frames")
+    if focus:
+        lo, hi = min(focus), max(focus)
+        dist = "infinity" if hi == 0 else f"{1 / hi:.2f} m" if lo == hi else f"{1 / hi:.2f}..{(1 / lo if lo else float('inf')):.2f} m"
+        print(f"focus distance: {lo:.3f}..{hi:.3f} diopters ({dist}; metric only if device.json calibration allows)")
+        if hi - lo > 1e-3:
+            errors.append(f"focus distance changed during recording ({lo:.3f}..{hi:.3f} diopters)")
+    if exposure:
+        print(f"exposure: {min(exposure) / 1e6:.2f}..{max(exposure) / 1e6:.2f} ms (median "
+              f"{statistics.median(exposure) / 1e6:.2f} ms)" + (f", rolling shutter skew {statistics.median(skew) / 1e6:.1f} ms" if skew else ""))
+    if any(ois):
+        errors.append(f"optical stabilization was ON in {sum(1 for v in ois if v)} frames: intrinsics may vary per frame")
     return errors
 
 

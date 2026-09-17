@@ -27,16 +27,23 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ```bash
 tools/pull_captures.sh                          # copies sessions into ./data/
-uv run tools/check_sync.py data/capture-…      # timing + pose/image consistency checks
-uv run tools/plot_trajectory.py data/capture-…  # stats + plot (--save writes trajectory.png)
+uv run tools/check_sync.py data/capture-…            # timing, pose/image/IMU consistency, OIS/focus
+uv run tools/plot_trajectory.py data/capture-…        # stats + plot (--save writes trajectory.png)
+uv run tools/overlay_check.py data/capture-…          # world-fixed axes drawn on frames (--gif for motion)
+uv run tools/check_imu_alignment.py data/capture-…    # camera↔IMU axes + time offset (rotate the phone)
+uv run tools/calibrate_camera.py data/capture-… --pattern 9x6 --square 0.025   # checkerboard calibration
 ```
 
-## Output (format `posecam-3`)
+On a new phone model, run `check_imu_alignment.py` on a recording with plenty of
+rotation before using its IMU data.
+
+## Output (format `posecam-4`)
 
 ```
 capture-20260916T213140-9c433c/
 ├── frames/          000000_<timestamp_ns>.jpg, ...
 ├── poses.csv        frame_index,timestamp_ns,tx,ty,tz,qx,qy,qz,qw,tracking_state,image
+├── frame_metadata.csv  per-frame exposure, ISO, focus distance, OIS mode, rolling shutter skew
 ├── imu.csv          timestamp_ns,sensor,x,y,z,bias_x,bias_y,bias_z
 ├── intrinsics.json  fx, fy, cx, cy, width, height (+ whether they changed)
 ├── device.json      phone, Camera2 characteristics, IMU sensor details
@@ -52,5 +59,9 @@ capture-20260916T213140-9c433c/
 - `imu.csv` interleaves `accel` and `gyro_uncal` samples in arrival order. The bias
   columns are empty for `accel`. The axes are the phone's, not the camera's: see
   [COORDINATES.md](docs/COORDINATES.md).
-- Older formats: `posecam-2` has no IMU, intrinsics or device files; `posecam-1` also
-  has no `image` column and no `frames/`.
+- `manifest.json` → `record_pressed_elapsed_realtime_ns` is the Record tap on the same
+  clock as all timestamps.
+- The CPU image size is selectable in the app (button at bottom left). Intrinsics
+  change with it, so recordings at different sizes are not interchangeable.
+- Older formats: `posecam-3` has no `frame_metadata.csv`; `posecam-2` also has no IMU,
+  intrinsics or device files; `posecam-1` also has no `image` column and no `frames/`.
