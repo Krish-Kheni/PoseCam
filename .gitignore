@@ -22,3 +22,6 @@ data/
 
 # OS
 .DS_Store
+
+# AnySense exports built from data/
+exports/

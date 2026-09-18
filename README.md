@@ -33,7 +33,26 @@ uv run tools/plot_trajectory.py data/capture-…        # stats + plot (--save w
 uv run tools/overlay_check.py data/capture-…          # world-fixed axes drawn on frames (--gif for motion)
 uv run tools/check_imu_alignment.py data/capture-…    # camera↔IMU axes + time offset (rotate the phone)
 uv run tools/calibrate_camera.py data/capture-… --pattern 9x6 --square 0.025   # checkerboard calibration
+uv run tools/export_anysense.py data/capture-…        # AnySense-style folder (MP4 + AR_Pose txt)
 ```
+
+## Exporting for AnySense-based pipelines
+
+`tools/export_anysense.py` writes the folder NYU's AnySense iPhone app produces, so
+downstream code written for AnySense can consume PoseCam data:
+
+```
+exports/2026-09-17-14_58_35/
+├── RGB_2026-09-17-14_58_35.mp4       H.264, portrait (camera frame rotated 90°), 30 fps
+├── AR_Pose_2026-09-17-14_58_35.txt   one line per frame: "<epoch_ms>" ,qx,qy,qz,qw,tx,ty,tz
+└── posecam_export.json               provenance (not part of AnySense's format)
+```
+
+Pose line N is video frame N. By default only the longest segment without pose jumps
+or tracking loss is exported (`--all` for everything, `--segment N` to pick one);
+`--size 720x960` matches AnySense's video size, `--vfr` keeps each frame's real timing.
+Depth and tactile files are not produced. The pose is `Camera.getPose()` unchanged:
+AnySense's pose is likewise the sensor transform even though its video is portrait.
 
 On a new phone model, run `check_imu_alignment.py` on a recording with plenty of
 rotation before using its IMU data.
