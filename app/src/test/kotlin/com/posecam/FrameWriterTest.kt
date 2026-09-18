@@ -28,7 +28,7 @@ class FrameWriterTest {
         val writer = FrameWriter(dir, { image, out -> out.writeText("ts=${image.timestampNs}") }, pool)
 
         writer.submit(0, 100, filled(pool, 100))
-        writer.submit(1, 133_000_000, filled(pool, 134_000_000)) // 1 ms apart: same frame
+        writer.submit(1, 133_000_000, filled(pool, 141_000_000)) // 8 ms apart (Tecno jitter): same frame
         writer.submit(2, 166_000_000, filled(pool, 199_000_000)) // a frame interval apart: wrong frame
         val stats = writer.finish()
 

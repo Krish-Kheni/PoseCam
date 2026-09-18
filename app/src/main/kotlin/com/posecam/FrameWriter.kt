@@ -48,7 +48,8 @@ class FrameWriter(
         executor.execute {
             try {
                 // Filenames use the frame timestamp. The image's own timestamp differs by
-                // ~1 ms (measured on SM-G781B); anything near a frame interval is a wrong frame.
+                // ~1 ms on an S20 FE and up to ~8 ms on a Tecno Pova 5G; anything beyond half
+                // a frame interval means the JPEG is a different frame than the pose.
                 val delta = buffer.timestampNs - timestampNs
                 if (abs(delta) > MISMATCH_THRESHOLD_NS) mismatches.incrementAndGet()
                 minDeltaNs = minOf(minDeltaNs, delta)
@@ -76,7 +77,7 @@ class FrameWriter(
     }
 
     companion object {
-        const val MISMATCH_THRESHOLD_NS = 5_000_000L
+        const val MISMATCH_THRESHOLD_NS = 16_000_000L
 
         fun fileName(frameIndex: Long, timestampNs: Long): String = "%06d_%d.jpg".format(frameIndex, timestampNs)
     }

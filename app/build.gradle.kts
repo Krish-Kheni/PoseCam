@@ -11,8 +11,8 @@ android {
         // ARCore's own minimum; any phone that can run ARCore can run PoseCam.
         minSdk = 24
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.2.1"
     }
 
     buildTypes {

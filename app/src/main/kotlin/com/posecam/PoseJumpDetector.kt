@@ -66,7 +66,8 @@ class PoseJumpDetector(
 
         if (distance / dt <= maxSpeedMPerS && angle / dt <= maxRateRadPerS) return null
         val jump = Jump(frameIndex, timestampNs, distance, Math.toDegrees(angle), dt)
-        if (jumps.size < MAX_RECORDED) jumps.add(jump)
+        // Negative indices are idle-time probes (gate only), not part of any recording.
+        if (frameIndex >= 0 && jumps.size < MAX_RECORDED) jumps.add(jump)
         return jump
     }
 

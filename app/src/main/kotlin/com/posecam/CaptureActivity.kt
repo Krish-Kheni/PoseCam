@@ -53,6 +53,8 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
     private lateinit var recorder: PoseRecorder
     private val backgroundRenderer = BackgroundRenderer()
     private val trackingGate = TrackingGate()
+    /** Watches for relocalization jumps while idle, so the gate does not arm mid-settling. */
+    private val idleJumpDetector = PoseJumpDetector()
     private lateinit var imageGrabber: ImageGrabber
     private val imuRecorder = ImuRecorder()
     private lateinit var imuSource: ImuSource
@@ -444,7 +446,14 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             resetTrackingGate = false
             trackingGate.update(false, timestampNs)
         }
-        val armed = trackingGate.update(state == TrackingState.TRACKING, timestampNs)
+        val jumped = if (state == TrackingState.TRACKING) {
+            val pose = camera.pose
+            idleJumpDetector.onTrackedFrame(-1, timestampNs, pose.translation, pose.rotationQuaternion) != null
+        } else {
+            idleJumpDetector.onUntrackedFrame()
+            false
+        }
+        val armed = trackingGate.update(state == TrackingState.TRACKING, timestampNs, jumped)
         if (timestampNs - lastUiUpdateTimestampNs >= UI_UPDATE_INTERVAL_NS) {
             lastUiUpdateTimestampNs = timestampNs
             updateUi(state, camera.trackingFailureReason, armed)
@@ -462,6 +471,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             recording -> "● REC  %.1f s  ·  %d frames  ·  %d dropped%s\nTracking: %s"
                 .format(seconds, frames, dropped, if (jumps > 0) "  ·  $jumps jump(s)" else "", tracking)
             armed -> "Ready to record\nTracking: $tracking"
+            state == TrackingState.TRACKING -> "Stabilizing, keep moving slowly…\nTracking: $tracking"
             else -> "Move the phone slowly to start tracking…\nTracking: $tracking"
         }
         runOnUiThread {

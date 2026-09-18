@@ -138,10 +138,14 @@ def check(session: Path) -> list[str]:
             delta = images.get("image_minus_frame_timestamp_ns_range")
             if delta:
                 print(f"image timestamp - frame timestamp: {delta[0] / 1e6:+.3f} .. {delta[1] / 1e6:+.3f} ms")
-            # posecam-2 builds before the threshold existed counted any nonzero difference.
-            if images.get("image_frame_timestamp_mismatches_over_5ms"):
-                errors.append(f"manifest: {images['image_frame_timestamp_mismatches_over_5ms']} images more than "
-                              "5 ms from their ARCore frame timestamp (probably a different frame)")
+            # Older builds used a 5 ms threshold, which Tecno timestamp jitter (up to 8 ms)
+            # trips without the image being a different frame; judge those by the range.
+            if images.get("image_frame_timestamp_mismatches_over_half_frame"):
+                errors.append(f"manifest: {images['image_frame_timestamp_mismatches_over_half_frame']} images "
+                              "more than half a frame from their ARCore frame timestamp (a different frame)")
+            elif images.get("image_frame_timestamp_mismatches_over_5ms") and delta and max(abs(delta[0]), abs(delta[1])) > 16e6:
+                errors.append(f"manifest: image timestamps up to {max(abs(delta[0]), abs(delta[1])) / 1e6:.0f} ms "
+                              "from their frame timestamp (some JPEGs may be a different frame)")
 
         clock = m.get("clock_check") or {}
         frame_age = clock.get("elapsed_realtime_minus_first_frame_timestamp_ns")

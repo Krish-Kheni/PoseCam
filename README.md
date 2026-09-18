@@ -57,8 +57,9 @@ only. Interior frames are never deleted: tracking gaps of up to `--hold-max-fram
 (default 15) get interpolated poses, longer gaps end the segment. By default the longest
 segment without pose jumps or long gaps is exported (`--all` for everything,
 `--segment N` to pick one). `--rotate` sets the image rotation (default 90° = upright
-portrait); the consumer's gripper detector needs the **jaws pointing up** in the
-exported video, so check one frame. `--size 720x960` matches AnySense's video size,
+portrait for a phone held upright; `--rotate 0` for a landscape gripper mount); the
+consumer's gripper detector needs the **jaws pointing up** in the exported video, so
+check one frame per mount. `--size 720x960` matches AnySense's video size,
 `--vfr` keeps real frame timing. Poses are raw `Camera.getPose()`: no re-basing, no
 smoothing, same OpenGL camera convention as ARKit (verified: forward motion is −Z).
 

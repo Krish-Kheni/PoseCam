@@ -42,12 +42,18 @@ yourself (see README).
 
 Requirements from the training pipeline (cap_tools), for gripper demonstrations:
 
-- **Blue jaws visible in every frame**, pointing **up** in the portrait video. The gripper
-  aperture is recovered from the video by colour, not logged by the app.
+- **Jaws visible in every frame**, pointing **up** in the exported video (the phone can
+  be mounted landscape or portrait; the exporter's `--rotate` option is set once per
+  mount). The gripper aperture is recovered from the video by colour, not logged by
+  the app, so the pipeline must know the jaw colour.
 - **Start each demo with the gripper wide open**, and open→close it fully at least once.
 - **Tracking loss ends the take.** If the status shows PAUSED for more than a moment,
   stop, and start a new recording. Gaps longer than half a second cannot be bridged.
 - Keep 30 fps (locked 640×480): action labels are 8-frame strides.
+- **Good light.** In a dim room the exposure reaches its 33 ms maximum and fast hand
+  motion blurs (seen on the Tecno takes). A desk lamp on the workspace is enough.
+- **Wait for "Ready to record"** (about 3 s of stable tracking) and move the phone
+  gently while waiting; ARCore is still settling its scale in the first seconds.
 
 Good habits:
 

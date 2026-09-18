@@ -231,7 +231,7 @@ class PoseRecorder(
         images["dropped"] = LinkedHashMap(droppedByReason)
         images["write_failures"] = stats?.failedFrameIndices
         images["first_write_error"] = stats?.firstError
-        images["image_frame_timestamp_mismatches_over_5ms"] = stats?.timestampMismatches
+        images["image_frame_timestamp_mismatches_over_half_frame"] = stats?.timestampMismatches
         images["image_minus_frame_timestamp_ns_range"] = stats?.imageMinusFrameNs
 
         val manifest = linkedMapOf<String, Any?>(

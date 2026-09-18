@@ -16,6 +16,24 @@ class TrackingGateTest {
     }
 
     @Test
+    fun poseJumpResetsTheTimer() {
+        val gate = TrackingGate(second)
+        gate.update(true, 0)
+        assertFalse(gate.update(true, second / 2, jumped = true))
+        assertFalse(gate.update(true, second))           // timer restarts here
+        assertFalse(gate.update(true, second + second / 2))
+        assertTrue(gate.update(true, 2 * second))
+    }
+
+    @Test
+    fun defaultRequiresThreeSeconds() {
+        val gate = TrackingGate()
+        gate.update(true, 0)
+        assertFalse(gate.update(true, 2 * second))
+        assertTrue(gate.update(true, 3 * second))
+    }
+
+    @Test
     fun lossOfTrackingResetsTheTimer() {
         val gate = TrackingGate(second)
         gate.update(true, 0)
