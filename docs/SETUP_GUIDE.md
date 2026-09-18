@@ -42,10 +42,17 @@ yourself (see README).
 
 Requirements from the training pipeline (cap_tools), for gripper demonstrations:
 
-- **Jaws visible in every frame**, pointing **up** in the exported video (the phone can
-  be mounted landscape or portrait; the exporter's `--rotate` option is set once per
-  mount). The gripper aperture is recovered from the video by colour, not logged by
-  the app, so the pipeline must know the jaw colour.
+- **Both jaws completely inside the frame, with margin**, pointing **up** in the
+  exported video (the phone can be mounted landscape or portrait; the exporter's
+  `--rotate` option is set once per mount). The gripper aperture is recovered from the
+  video by colour-segmenting the jaws, and a jaw cut by the frame edge corrupts that
+  measurement. On the first Tecno mount the right jaw ran off the edge in half the
+  frames: shift the phone toward the jaws' centre line, or move it back.
+- **Plain background.** Nothing on the table in the jaws' colour: a red-flowered
+  tablecloth produced jaw-sized red patches in most frames. A plain surface fixes it.
+- Before recording at volume, run `uv run tools/check_gripper_view.py data/<session>`
+  on a short test take (pass `--rotate` as the export will, and `--hue-lo/--hue-hi`
+  for the jaw colour): it reports edge contact and background clutter.
 - **Start each demo with the gripper wide open**, and open→close it fully at least once.
 - **Tracking loss ends the take.** If the status shows PAUSED for more than a moment,
   stop, and start a new recording. Gaps longer than half a second cannot be bridged.
@@ -105,6 +112,7 @@ the results to the "Device notes" in CLAUDE.md.
 | Lens distortion and intrinsics | 30 s of a checkerboard covering all image regions (`tools/make_checkerboard.py` renders one for a monitor) | `uv run tools/calibrate_camera.py data/<session> --pattern 9x6 --square <metres>` | report the verdict and the % differences |
 | Heat | 10 min continuous, unplugged | `uv run tools/check_sync.py data/<session>` | fps per 30 s window stays near 30, no drop clusters |
 | Visual alignment | any recording with a surface ~1 m ahead at the start | `uv run tools/overlay_check.py data/<session> --distance 1.0` | axes stay on the same spot in the scene |
+| Gripper view | 30 s on the mount, jaws opening and closing | `uv run tools/check_gripper_view.py data/<session> --rotate <R>` | prints `OK`: both jaws found, no side-edge contact, little clutter |
 
 ## 6. Every recording
 

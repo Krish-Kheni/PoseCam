@@ -38,6 +38,7 @@ uv run tools/overlay_check.py data/capture-…          # world-fixed axes drawn
 uv run tools/check_imu_alignment.py data/capture-…    # camera↔IMU axes + time offset (rotate the phone)
 uv run tools/calibrate_camera.py data/capture-… --pattern 9x6 --square 0.025   # checkerboard calibration
 uv run tools/export_anysense.py data/capture-…        # AnySense-style folder (MP4 + AR_Pose txt)
+uv run tools/check_gripper_view.py data/capture-…     # jaws fully in frame? background clutter?
 ```
 
 ## Exporting for AnySense-based pipelines
