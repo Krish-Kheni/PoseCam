@@ -92,11 +92,30 @@ def fill_short_gaps(poses, hold_max: int) -> tuple[np.ndarray, np.ndarray, list[
     return pos, quat, filled
 
 
-def segments(poses, has_pose: np.ndarray, breaks: set[int]) -> list[list[int]]:
-    """Runs of consecutive rows with a pose and a saved image, split at [breaks]."""
-    out, current = [], []
+def image_rows(poses, hold_max: int) -> tuple[list[int | None], list[int]]:
+    """For each row, the row whose JPEG to use: itself when saved, else the nearest earlier
+    saved row if within [hold_max] frames (a dropped image is replaced by the previous one,
+    33 ms stale, rather than breaking the take). None when there is nothing to reuse."""
+    source: list[int | None] = []
+    held = []
+    last_saved = None
     for i, r in enumerate(poses.rows):
-        usable = has_pose[i] and r.get("image", "saved") == "saved"
+        if r.get("image", "saved") == "saved":
+            last_saved = i
+            source.append(i)
+        elif last_saved is not None and i - last_saved <= hold_max:
+            source.append(last_saved)
+            held.append(i)
+        else:
+            source.append(None)
+    return source, held
+
+
+def segments(poses, has_pose: np.ndarray, image_source: list[int | None], breaks: set[int]) -> list[list[int]]:
+    """Runs of consecutive rows with a pose and an image, split at [breaks]."""
+    out, current = [], []
+    for i in range(len(poses.rows)):
+        usable = has_pose[i] and image_source[i] is not None
         if not usable or i in breaks:
             if current:
                 out.append(current)
@@ -193,7 +212,8 @@ def main():
     jumps = jump_rows(poses)
     pos, quat, filled = fill_short_gaps(poses, args.hold_max_frames)
     has_pose = ~np.isnan(pos[:, 0])
-    segs = segments(poses, has_pose, set() if args.all else set(jumps))
+    image_source, held = image_rows(poses, args.hold_max_frames)
+    segs = segments(poses, has_pose, image_source, set() if args.all else set(jumps))
     if not segs:
         sys.exit("no tracked frames with images")
     if args.all:
@@ -209,9 +229,10 @@ def main():
     if seconds < args.min_seconds:
         sys.exit(f"{label} is only {seconds:.1f} s (< --min-seconds {args.min_seconds})")
     filled_in = [j for j in filled if chosen[0] <= j <= chosen[-1]]
+    held_in = [j for j in held if chosen[0] <= j <= chosen[-1]]
     print(f"{args.session.name}: {len(poses.rows)} rows, {len(jumps)} jump(s), {len(filled)} gap frame(s) "
           f"interpolated; exporting {label}: rows {chosen[0]}-{chosen[-1]}, {len(chosen)} frames, {seconds:.1f} s, "
-          f"{len(filled_in)} interpolated")
+          f"{len(filled_in)} interpolated pose(s), {len(held_in)} reused image(s)")
 
     ms = epoch_ms(manifest, poses.timestamp_ns[chosen])
     stamp = datetime.fromtimestamp(ms[0] / 1000).strftime("%Y-%m-%d-%H_%M_%S")  # local time, as AnySense
@@ -221,7 +242,8 @@ def main():
     pose_txt = out_dir / f"AR_Pose_{stamp}.txt"
 
     size = tuple(int(v) for v in args.size.lower().split("x")) if args.size else None
-    files = [frame_path(args.session, int(poses.frame_index[i]), int(poses.timestamp_ns[i])) for i in chosen]
+    files = [frame_path(args.session, int(poses.frame_index[image_source[i]]), int(poses.timestamp_ns[image_source[i]]))
+             for i in chosen]
     durations = None
     if args.vfr:
         t = poses.timestamp_ns[chosen] / 1e9
@@ -246,7 +268,8 @@ def main():
         "frames": len(chosen),
         "selection": label,
         "pose_jumps_in_source": jumps,
-        "interpolated_rows": filled_in,
+        "interpolated_pose_rows": filled_in,
+        "reused_previous_image_rows": held_in,
         "measured_fps": manifest.get("measured_fps"),
         "video": {"rotation_deg_clockwise": args.rotate, "size": size or "native rotated",
                   "fps": "variable (real timing)" if args.vfr else args.fps},
