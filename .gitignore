@@ -25,3 +25,6 @@ data/
 
 # AnySense exports built from data/
 exports/
+
+# Shareable APK builds
+dist/
