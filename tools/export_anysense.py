@@ -19,11 +19,16 @@ ARViewContainer.swift), minus depth/tactile:
 Pose line N corresponds to video frame N, as in AnySense, and the consumer
 (cap_tools/convert.py) aligns strictly by index. Never delete interior frames: that
 turns a gap into one huge apparent motion, which the consumer treats as a jump and
-truncates the take. Instead, short tracking gaps (<= --hold-max-frames) get poses
-linearly interpolated between the surrounding tracked frames (rows listed in
-posecam_export.json), and longer gaps end the segment. Leading and trailing untracked
-frames are dropped. By default only the longest segment (split at ARCore pose jumps and
-long gaps) is exported; --segment picks another.
+truncates the take. Rules agreed with the consumer (2026-09-18):
+
+  * Tracking gaps of at most --hold-max-frames (default 5, under its 8-frame action
+    stride) get poses interpolated between the surrounding tracked frames; the rows
+    are listed in posecam_export.json. Interpolated motion cannot be masked
+    downstream, so the cap keeps the fabricated span short and bounded by real poses.
+  * Longer gaps and ARCore pose jumps end the segment. EVERY clean segment of at least
+    --min-seconds (default 3 s) is exported as its own <stem>/ recording; the consumer
+    treats each folder as one demo, so only the gap itself is lost.
+  * Leading and trailing untracked frames are dropped.
 
 The consumer's gripper detector assumes the jaws point UP in the image. --rotate sets
 the rotation applied to the sensor image (default 90 = upright portrait for a phone held
@@ -184,58 +189,17 @@ def count_frames(video: Path) -> int:
     return int(r.stdout.strip())
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("session", type=Path)
-    parser.add_argument("--out", type=Path, default=Path("exports"), help="parent folder for exports")
-    parser.add_argument("--all", action="store_true", help="export every frame with a pose in one file, jumps and long gaps included")
-    parser.add_argument("--hold-max-frames", type=int, default=15,
-                        help="interpolate tracking gaps up to this many frames (0.5 s at 30 fps); longer gaps end the segment")
-    parser.add_argument("--rotate", type=int, default=90, choices=(0, 90, 180, 270),
-                        help="clockwise rotation applied to the sensor image; jaws must point up in the result")
-    parser.add_argument("--segment", type=int, help="export this segment index (0-based, in time order) instead of the longest")
-    parser.add_argument("--size", default=None, help="output WxH after rotation, e.g. 720x960 to match AnySense; default keeps native (480x640)")
-    parser.add_argument("--fps", type=float, default=30.0, help="nominal frame rate written to the MP4")
-    parser.add_argument("--vfr", action="store_true", help="keep each frame's real timing instead of a constant rate")
-    parser.add_argument("--min-seconds", type=float, default=2.0, help="refuse to export segments shorter than this")
-    args = parser.parse_args()
-
-    for tool in ("ffmpeg", "ffprobe"):
-        if not shutil.which(tool):
-            sys.exit(f"{tool} not found on PATH")
-
-    poses = load_poses(args.session)
-    manifest = load_json(args.session, "manifest.json")
-    if not manifest.get("complete", True):
-        sys.exit("manifest says the recording did not stop cleanly")
-
-    jumps = jump_rows(poses)
-    pos, quat, filled = fill_short_gaps(poses, args.hold_max_frames)
-    has_pose = ~np.isnan(pos[:, 0])
-    image_source, held = image_rows(poses, args.hold_max_frames)
-    segs = segments(poses, has_pose, image_source, set() if args.all else set(jumps))
-    if not segs:
-        sys.exit("no tracked frames with images")
-    if args.all:
-        chosen = [i for s in segs for i in s]
-        label = "all tracked frames"
-    elif args.segment is not None:
-        chosen = segs[args.segment]
-        label = f"segment {args.segment} of {len(segs)}"
-    else:
-        chosen = max(segs, key=len)
-        label = f"longest of {len(segs)} segment(s)"
+def export_segment(args, poses, manifest, chosen, pos, quat, filled, held, image_source, jumps,
+                   label, segments_total, used_stems: set[str]) -> Path:
+    """Writes one <stem>/ folder for the rows in [chosen]; returns the folder."""
     seconds = (poses.timestamp_ns[chosen[-1]] - poses.timestamp_ns[chosen[0]]) / 1e9
-    if seconds < args.min_seconds:
-        sys.exit(f"{label} is only {seconds:.1f} s (< --min-seconds {args.min_seconds})")
     filled_in = [j for j in filled if chosen[0] <= j <= chosen[-1]]
     held_in = [j for j in held if chosen[0] <= j <= chosen[-1]]
-    print(f"{args.session.name}: {len(poses.rows)} rows, {len(jumps)} jump(s), {len(filled)} gap frame(s) "
-          f"interpolated; exporting {label}: rows {chosen[0]}-{chosen[-1]}, {len(chosen)} frames, {seconds:.1f} s, "
-          f"{len(filled_in)} interpolated pose(s), {len(held_in)} reused image(s)")
-
     ms = epoch_ms(manifest, poses.timestamp_ns[chosen])
     stamp = datetime.fromtimestamp(ms[0] / 1000).strftime("%Y-%m-%d-%H_%M_%S")  # local time, as AnySense
+    while stamp in used_stems:  # two segments starting within the same second
+        stamp += "b"
+    used_stems.add(stamp)
     out_dir = args.out / stamp
     out_dir.mkdir(parents=True, exist_ok=True)
     video = out_dir / f"RGB_{stamp}.mp4"
@@ -266,7 +230,9 @@ def main():
         "source_format": manifest.get("format_version"),
         "rows_exported": [int(chosen[0]), int(chosen[-1])],
         "frames": len(chosen),
+        "seconds": round(float(seconds), 3),
         "selection": label,
+        "segments_in_source": segments_total,
         "pose_jumps_in_source": jumps,
         "interpolated_pose_rows": filled_in,
         "reused_previous_image_rows": held_in,
@@ -277,7 +243,72 @@ def main():
         "note": "AnySense writes no intrinsics; see the source session's intrinsics.json (landscape orientation)",
     }
     (out_dir / "posecam_export.json").write_text(json.dumps(provenance, indent=2) + "\n")
-    print(f"wrote {video} ({n_frames} frames) and {pose_txt}")
+    print(f"  {label}: rows {chosen[0]}-{chosen[-1]}, {len(chosen)} frames, {seconds:.1f} s, "
+          f"{len(filled_in)} interpolated pose(s), {len(held_in)} reused image(s) -> {out_dir}")
+    return out_dir
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("session", type=Path)
+    parser.add_argument("--out", type=Path, default=Path("exports"), help="parent folder for exports")
+    parser.add_argument("--all", action="store_true",
+                        help="debug: export every frame with a pose as ONE recording, jumps and long gaps included")
+    parser.add_argument("--hold-max-frames", type=int, default=5,
+                        help="interpolate tracking gaps up to this many frames (must stay under the consumer's "
+                             "8-frame action stride); longer gaps end the segment")
+    parser.add_argument("--rotate", type=int, default=90, choices=(0, 90, 180, 270),
+                        help="clockwise rotation applied to the sensor image; jaws must point up in the result")
+    parser.add_argument("--segment", type=int, help="export only this segment index (0-based, in time order)")
+    parser.add_argument("--size", default=None, help="output WxH after rotation, e.g. 720x960 to match AnySense; default keeps native")
+    parser.add_argument("--fps", type=float, default=30.0, help="nominal frame rate written to the MP4")
+    parser.add_argument("--vfr", action="store_true", help="keep each frame's real timing instead of a constant rate")
+    parser.add_argument("--min-seconds", type=float, default=3.0, help="skip segments shorter than this")
+    args = parser.parse_args()
+
+    for tool in ("ffmpeg", "ffprobe"):
+        if not shutil.which(tool):
+            sys.exit(f"{tool} not found on PATH")
+
+    poses = load_poses(args.session)
+    manifest = load_json(args.session, "manifest.json")
+    if not manifest.get("complete", True):
+        sys.exit("manifest says the recording did not stop cleanly")
+
+    jumps = jump_rows(poses)
+    pos, quat, filled = fill_short_gaps(poses, args.hold_max_frames)
+    has_pose = ~np.isnan(pos[:, 0])
+    image_source, held = image_rows(poses, args.hold_max_frames)
+    segs = segments(poses, has_pose, image_source, set() if args.all else set(jumps))
+    if not segs:
+        sys.exit("no tracked frames with images")
+
+    def seconds_of(seg):
+        return (poses.timestamp_ns[seg[-1]] - poses.timestamp_ns[seg[0]]) / 1e9
+
+    print(f"{args.session.name}: {len(poses.rows)} rows, {len(jumps)} jump(s), {len(filled)} gap frame(s) "
+          f"interpolated, {len(segs)} segment(s)")
+    used: set[str] = set()
+    if args.all:
+        chosen = [i for s in segs for i in s]
+        export_segment(args, poses, manifest, chosen, pos, quat, filled, held, image_source, jumps,
+                       "all frames (debug)", len(segs), used)
+        return
+    if args.segment is not None:
+        segs = [(args.segment, segs[args.segment])]
+    else:
+        segs = list(enumerate(segs))
+    written = 0
+    for n, seg in segs:
+        if seconds_of(seg) < args.min_seconds:
+            print(f"  segment {n}: rows {seg[0]}-{seg[-1]}, {seconds_of(seg):.1f} s, skipped (< {args.min_seconds} s)")
+            continue
+        export_segment(args, poses, manifest, seg, pos, quat, filled, held, image_source, jumps,
+                       f"segment {n}", len(segs), used)
+        written += 1
+    if written == 0:
+        sys.exit("no segment long enough to export")
+    print(f"wrote {written} recording(s) to {args.out}/")
 
 
 if __name__ == "__main__":

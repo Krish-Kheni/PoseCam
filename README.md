@@ -55,9 +55,11 @@ exports/2026-09-17-14_58_35/
 
 Pose line N is video frame N; the consumer (`cap_tools/convert.py`) aligns by index
 only. Interior frames are never deleted: tracking gaps of up to `--hold-max-frames`
-(default 15) get interpolated poses, longer gaps end the segment. By default the longest
-segment without pose jumps or long gaps is exported (`--all` for everything,
-`--segment N` to pick one). `--rotate` sets the image rotation (default 90° = upright
+(default 5, under the consumer's 8-frame action stride) get interpolated poses; longer
+gaps and ARCore pose jumps end the segment. **Every clean segment of at least
+`--min-seconds` (default 3 s) becomes its own recording folder**, each one demo for the
+consumer, so only the gaps themselves are lost (`--segment N` exports one; `--all` is a
+debug mode that ignores jumps). `--rotate` sets the image rotation (default 90° = upright
 portrait for a phone held upright; `--rotate 0` for a landscape gripper mount); the
 consumer's gripper detector needs the **jaws pointing up** in the exported video, so
 check one frame per mount. `--size 720x960` matches AnySense's video size,
