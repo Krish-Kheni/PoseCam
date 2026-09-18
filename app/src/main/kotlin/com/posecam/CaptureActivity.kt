@@ -41,6 +41,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
     private lateinit var recordButton: Button
     private lateinit var resolutionButton: Button
     private lateinit var focusButton: Button
+    private lateinit var sessionsButton: Button
 
     @Volatile private var session: Session? = null
     private var sessionMetadata: Map<String, Any?> = emptyMap()
@@ -82,6 +83,8 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         recordButton = findViewById(R.id.record)
         resolutionButton = findViewById(R.id.resolution)
         focusButton = findViewById(R.id.focus)
+        sessionsButton = findViewById(R.id.sessions)
+        sessionsButton.setOnClickListener { startActivity(Intent(this, SessionsActivity::class.java)) }
 
         val root = getExternalFilesDir(null)
         if (root == null) {
@@ -304,6 +307,12 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         if (recorder.isRecording) {
             stopRecording()
         } else {
+            val freeGb = (getExternalFilesDir(null)?.usableSpace ?: 0L) / 1e9
+            if (freeGb < MIN_FREE_GB) {
+                // ~5 GB/h at 640x480; running out mid-take corrupts nothing but loses the rest.
+                Toast.makeText(this, "Only %.1f GB free: delete or export old recordings first".format(freeGb), Toast.LENGTH_LONG).show()
+                return
+            }
             try {
                 val pressedNs = SystemClock.elapsedRealtimeNanos()
                 firstFrameAgeNs = null
@@ -460,6 +469,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             recordButton.isEnabled = recording || armed
             resolutionButton.isEnabled = !recording && availableSizes.size > 1
             focusButton.isEnabled = !recording
+            sessionsButton.isEnabled = !recording
         }
     }
 
@@ -482,5 +492,6 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         const val PREF_WIDTH = "cpu_image_width"
         const val PREF_HEIGHT = "cpu_image_height"
         const val PREF_AUTOFOCUS = "autofocus"
+        const val MIN_FREE_GB = 1.0
     }
 }

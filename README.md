@@ -26,6 +26,10 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## Get the data
 
+On the phone, **Recordings** lists sessions and can share a zip, save it to
+`Downloads/PoseCam/`, or delete it (see [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md)).
+With adb:
+
 ```bash
 tools/pull_captures.sh                          # copies sessions into ./data/
 uv run tools/check_sync.py data/capture-…            # timing, pose/image/IMU consistency, OIS/focus

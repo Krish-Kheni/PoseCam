@@ -20,6 +20,22 @@
 
         <meta-data android:name="com.google.ar.core" android:value="required" />
 
+        <activity
+            android:name=".SessionsActivity"
+            android:exported="false"
+            android:label="Recordings"
+            android:theme="@android:style/Theme.Material.Light" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <!-- Portrait-locked: a rotation would recreate the activity and tear down
              the ARCore session mid-recording. Pose is unaffected by screen rotation. -->
         <activity

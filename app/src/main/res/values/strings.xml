@@ -2,4 +2,9 @@
     <string name="app_name">PoseCam</string>
     <string name="record">Record</string>
     <string name="stop">Stop</string>
+    <string name="recordings">Recordings</string>
+    <string name="share">Share (zip)</string>
+    <string name="save_to_downloads">Save zip to Downloads</string>
+    <string name="delete">Delete</string>
+    <string name="no_recordings">No recordings yet.\n\nRecordings are stored in this app\'s private folder:\n%1$s\n\nUse Share or Save to Downloads to get them off the phone.</string>
 </resources>

@@ -59,7 +59,25 @@ Good habits:
 
 ## 4. Get recordings onto a computer
 
-From the PoseCam repository, with the phone connected:
+Recordings are stored in the app's private folder
+(`Android/data/com.posecam/files/captures/`), which file managers cannot browse on
+modern Android. Use the **Recordings** button in the app instead. It lists every
+recording with its length, frame count and size, and tapping one offers:
+
+- **Share (zip)**: packs the recording and opens the Android share sheet. Send it to
+  Google Drive, WhatsApp, email, or whatever you use. Recordings are about 1.5 MB per
+  second, so a 30 s demo is ~45 MB.
+- **Save zip to Downloads**: writes `Downloads/PoseCam/<recording>.zip`, which any file
+  manager shows and which a computer can copy over USB (plug in, choose "File
+  transfer", open the phone's `Download/PoseCam` folder).
+- **Delete**: once it has been shared or saved. The app refuses to record with less
+  than 1 GB free.
+
+Send the zips to whoever runs the analysis. They unzip into the `data/` folder of the
+PoseCam repository, one folder per recording, and the tools below work unchanged.
+
+Alternatively, with USB debugging and the phone connected to a computer that has the
+repository:
 
 ```bash
 tools/pull_captures.sh            # copies finished recordings into data/
