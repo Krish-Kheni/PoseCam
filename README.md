@@ -48,11 +48,15 @@ exports/2026-09-17-14_58_35/
 └── posecam_export.json               provenance (not part of AnySense's format)
 ```
 
-Pose line N is video frame N. By default only the longest segment without pose jumps
-or tracking loss is exported (`--all` for everything, `--segment N` to pick one);
-`--size 720x960` matches AnySense's video size, `--vfr` keeps each frame's real timing.
-Depth and tactile files are not produced. The pose is `Camera.getPose()` unchanged:
-AnySense's pose is likewise the sensor transform even though its video is portrait.
+Pose line N is video frame N; the consumer (`cap_tools/convert.py`) aligns by index
+only. Interior frames are never deleted: tracking gaps of up to `--hold-max-frames`
+(default 15) get interpolated poses, longer gaps end the segment. By default the longest
+segment without pose jumps or long gaps is exported (`--all` for everything,
+`--segment N` to pick one). `--rotate` sets the image rotation (default 90° = upright
+portrait); the consumer's gripper detector needs the **jaws pointing up** in the
+exported video, so check one frame. `--size 720x960` matches AnySense's video size,
+`--vfr` keeps real frame timing. Poses are raw `Camera.getPose()`: no re-basing, no
+smoothing, same OpenGL camera convention as ARKit (verified: forward motion is −Z).
 
 On a new phone model, run `check_imu_alignment.py` on a recording with plenty of
 rotation before using its IMU data.

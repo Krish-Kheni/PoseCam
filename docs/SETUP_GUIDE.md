@@ -40,6 +40,15 @@ yourself (see README).
    **Ready to record**.
 3. **Record** → capture → **Stop**.
 
+Requirements from the training pipeline (cap_tools), for gripper demonstrations:
+
+- **Blue jaws visible in every frame**, pointing **up** in the portrait video. The gripper
+  aperture is recovered from the video by colour, not logged by the app.
+- **Start each demo with the gripper wide open**, and open→close it fully at least once.
+- **Tracking loss ends the take.** If the status shows PAUSED for more than a moment,
+  stop, and start a new recording. Gaps longer than half a second cannot be bridged.
+- Keep 30 fps (locked 640×480): action labels are 8-frame strides.
+
 Good habits:
 
 - Never point at blank walls, ceilings or dark areas. Tracking gets lost there, and it

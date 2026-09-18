@@ -244,6 +244,8 @@ class PoseRecorder(
             "tracked_frame_count" to trackedCount,
             "first_timestamp_ns" to firstTimestampNs,
             "last_timestamp_ns" to lastTimestampNs,
+            // Downstream action labels are frame strides, so the achieved rate matters.
+            "measured_fps" to measuredFps(),
             // Tap time on the frame/IMU clock. Row 0 of poses.csv is the first frame the app
             // received after it, which was exposed up to ~100 ms earlier.
             "record_pressed_elapsed_realtime_ns" to recordPressedElapsedNs,
@@ -256,6 +258,13 @@ class PoseRecorder(
         manifest.putAll(baseMetadata)
         manifest.putAll(extraMetadata)
         File(directory, "manifest.json").writeText(Json.write(manifest) + "\n")
+    }
+
+    private fun measuredFps(): Double? {
+        val first = firstTimestampNs ?: return null
+        val last = lastTimestampNs ?: return null
+        if (frameCount < 2 || last <= first) return null
+        return Math.round((frameCount - 1) * 1e9 / (last - first) * 100) / 100.0
     }
 
     private fun writeIntrinsics(complete: Boolean) {

@@ -69,6 +69,8 @@ class PoseRecorderTest {
         assertTrue(intrinsics.contains("\"complete\": true"))
         assertTrue(intrinsics.contains("\"fx\": 500.0"))
         assertTrue(manifest.contains("\"frame_count\": 3"))
+        assertTrue(manifest.contains("\"measured_fps\": "))
+        assertFalse(manifest.contains("\"measured_fps\": null"))
         assertTrue(manifest.contains("\"tracked_frame_count\": 2"))
         assertTrue(manifest.contains("\"written\": 2"))
         assertTrue(manifest.contains("\"not_yet_available\": 1"))
