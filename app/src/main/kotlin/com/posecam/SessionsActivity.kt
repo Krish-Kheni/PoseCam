@@ -28,6 +28,10 @@ class SessionsActivity : Activity() {
 
     private class Row(val dir: File, val label: String)
 
+    private companion object {
+        const val PREF_ROTATION = "export_rotation_degrees"
+    }
+
     private lateinit var captures: File
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -79,27 +83,97 @@ class SessionsActivity : Activity() {
     }
 
     private fun showActions(row: Row) {
-        val actions = mutableListOf(getString(R.string.share))
+        val actions = mutableListOf(getString(R.string.export_pipeline), getString(R.string.share))
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) actions.add(getString(R.string.save_to_downloads))
         actions.add(getString(R.string.delete))
         AlertDialog.Builder(this)
             .setTitle(row.dir.name)
             .setItems(actions.toTypedArray()) { _, which ->
                 when (actions[which]) {
-                    getString(R.string.share) -> share(row.dir)
-                    getString(R.string.save_to_downloads) -> saveToDownloads(row.dir)
+                    getString(R.string.export_pipeline) -> askRotationThenExport(row.dir)
+                    getString(R.string.share) -> shareZip(row.dir, "${row.dir.name}.zip")
+                    getString(R.string.save_to_downloads) -> saveZipToDownloads(row.dir, "${row.dir.name}.zip")
                     getString(R.string.delete) -> confirmDelete(row.dir)
                 }
             }
             .show()
     }
 
+    /**
+     * The pipeline's gripper detector needs the jaws pointing up in the video, so the
+     * rotation depends on how the phone sits on the mount. Asked once and remembered.
+     */
+    private fun askRotationThenExport(dir: File) {
+        val prefs = getSharedPreferences(CaptureActivity.PREFS, MODE_PRIVATE)
+        val values = intArrayOf(0, 90, 180, 270)
+        val labels = arrayOf(
+            "No rotation — phone mounted sideways (landscape)",
+            "90° — phone mounted upright (portrait)",
+            "180°",
+            "270°",
+        )
+        val current = values.indexOf(prefs.getInt(PREF_ROTATION, 0)).coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle("Which way is up?")
+            .setSingleChoiceItems(labels, current, null)
+            .setPositiveButton(R.string.export_pipeline) { dialog, _ ->
+                val rotation = values[(dialog as AlertDialog).listView.checkedItemPosition.coerceAtLeast(0)]
+                prefs.edit().putInt(PREF_ROTATION, rotation).apply()
+                runExport(dir, rotation)
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun runExport(dir: File, rotation: Int) {
+        val root = File(File(cacheDir, "pipeline"), "${dir.name}-pipeline")
+        var result: PipelineExporter.Result? = null
+        withProgress("Exporting ${dir.name}", { setMessage ->
+            setMessage("Reading poses…")
+            result = PipelineExporter.export(dir, root, rotation, appVersion()) { stage, done, total ->
+                setMessage("$stage\n$done / $total frames")
+            }
+        }) { error ->
+            val done = result
+            if (error != null || done == null) {
+                AlertDialog.Builder(this)
+                    .setTitle("Export failed")
+                    .setMessage(error?.message ?: "Unknown error")
+                    .setPositiveButton(R.string.close, null)
+                    .show()
+                return@withProgress
+            }
+            val skipped = if (done.skipped > 0) "\n${done.skipped} short stretch(es) skipped." else ""
+            AlertDialog.Builder(this)
+                .setTitle("Exported ${done.folders.size} recording(s)")
+                .setMessage("${done.frames} frames, %.0f MB, rotation $rotation°.$skipped\n\nSend the export to whoever processes the data."
+                    .format(done.bytes / 1e6))
+                .setPositiveButton(R.string.share_export) { _, _ -> shareZip(root, "${root.name}.zip") }
+                .setNeutralButton(R.string.close, null)
+                .apply {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        setNegativeButton(R.string.save_export_to_downloads) { _, _ ->
+                            saveZipToDownloads(root, "${root.name}.zip")
+                        }
+                    }
+                }
+                .show()
+        }
+    }
+
+    private fun appVersion(): String = try {
+        @Suppress("DEPRECATION")
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+    } catch (e: Exception) {
+        "?"
+    }
+
     /** Runs [work] off the main thread with a progress dialog; [done] runs on the main thread. */
-    private fun withProgress(title: String, work: ((Int, Int) -> Unit) -> Unit, done: (Throwable?) -> Unit) {
+    private fun withProgress(title: String, work: ((String) -> Unit) -> Unit, done: (Throwable?) -> Unit) {
         val dialog = AlertDialog.Builder(this).setTitle(title).setMessage("Starting…").setCancelable(false).show()
         executor.execute {
             val error = runCatching {
-                work { n, total -> mainHandler.post { dialog.setMessage("$n / $total files") } }
+                work { message -> mainHandler.post { dialog.setMessage(message) } }
             }.exceptionOrNull()
             mainHandler.post {
                 dialog.dismiss()
@@ -108,11 +182,15 @@ class SessionsActivity : Activity() {
         }
     }
 
-    private fun share(dir: File) {
+    private fun shareZip(dir: File, zipName: String) {
         val shared = File(cacheDir, "shared").apply { mkdirs() }
         shared.listFiles()?.forEach { it.delete() } // previous zips; the share target has its own copy by now
-        val zip = File(shared, "${dir.name}.zip")
-        withProgress("Zipping ${dir.name}", { progress -> FileOutputStream(zip).use { SessionZipper.zip(dir, it, progress) } }) { error ->
+        val zip = File(shared, zipName)
+        withProgress("Zipping ${dir.name}", { setMessage ->
+            FileOutputStream(zip).use { out ->
+                SessionZipper.zip(dir, out) { n, total -> setMessage("$n / $total files") }
+            }
+        }) { error ->
             if (error != null) {
                 Toast.makeText(this, "Zip failed: $error", Toast.LENGTH_LONG).show()
                 return@withProgress
@@ -129,10 +207,10 @@ class SessionsActivity : Activity() {
     }
 
     /** Public Downloads/PoseCam/, visible in any file manager and over USB (MTP). */
-    private fun saveToDownloads(dir: File) {
+    private fun saveZipToDownloads(dir: File, zipName: String) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         val values = ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, "${dir.name}.zip")
+            put(MediaStore.Downloads.DISPLAY_NAME, zipName)
             put(MediaStore.Downloads.MIME_TYPE, "application/zip")
             put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/PoseCam")
             put(MediaStore.Downloads.IS_PENDING, 1)
@@ -143,15 +221,17 @@ class SessionsActivity : Activity() {
             Toast.makeText(this, "Could not create the Downloads entry", Toast.LENGTH_LONG).show()
             return
         }
-        withProgress("Saving ${dir.name} to Downloads", { progress ->
-            resolver.openOutputStream(uri)!!.use { SessionZipper.zip(dir, it, progress) }
+        withProgress("Saving ${dir.name} to Downloads", { setMessage ->
+            resolver.openOutputStream(uri)!!.use { out ->
+                SessionZipper.zip(dir, out) { n, total -> setMessage("$n / $total files") }
+            }
             resolver.update(uri, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null)
         }) { error ->
             if (error != null) {
                 resolver.delete(uri, null, null)
                 Toast.makeText(this, "Save failed: $error", Toast.LENGTH_LONG).show()
             } else {
-                Toast.makeText(this, "Saved to Downloads/PoseCam/${dir.name}.zip", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Saved to Downloads/PoseCam/$zipName", Toast.LENGTH_LONG).show()
             }
         }
     }

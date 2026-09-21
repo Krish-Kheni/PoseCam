@@ -136,11 +136,14 @@ def epoch_ms(manifest: dict, timestamp_ns: np.ndarray) -> np.ndarray:
     """Frame timestamps (elapsedRealtimeNanos) -> wall-clock epoch milliseconds, via the
     Record tap, which the manifest stamps on both clocks."""
     start = datetime.strptime(manifest["start_wall_time_utc"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
-    start_ms = start.timestamp() * 1000
     press_ns = manifest.get("record_pressed_elapsed_realtime_ns")
     if press_ns is None:  # posecam-3 and earlier: first frame ~100 ms before the tap
         press_ns = manifest["first_timestamp_ns"] + 100_000_000
-    return np.rint(start_ms + (timestamp_ns - press_ns) / 1e6).astype(np.int64)
+    # Round the offset from the tap, then add the (integer) wall-clock millisecond, exactly as
+    # the on-device exporter does: floor(x + 0.5) is Java's Math.round, and rounding the sum
+    # instead would inherit the float error in start.timestamp() * 1000.
+    start_ms = int(round(start.timestamp() * 1000))
+    return start_ms + np.floor((timestamp_ns - press_ns) / 1e6 + 0.5).astype(np.int64)
 
 
 def swift_float(v: float) -> str:

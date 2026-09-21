@@ -493,7 +493,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         recordButton.isEnabled = false
     }
 
-    private companion object {
+    internal companion object {
         const val TAG = "PoseCam"
         const val CAMERA_PERMISSION_REQUEST = 1
         const val UI_UPDATE_INTERVAL_NS = 200_000_000L
