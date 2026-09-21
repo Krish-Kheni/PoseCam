@@ -78,6 +78,11 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
     private var lastLoggedState = ""
     private var lastAlertedJumps = 0
     private var wasTrackingWhileRecording = true
+    // Frame rate over the last few seconds: a slow take is unusable to the consumer, whose
+    // action labels are a fixed number of frames apart.
+    private var fpsWindowStartNs = 0L
+    private var fpsWindowStartFrames = 0L
+    private var liveFps = 30.0
     private var lastUiUpdateTimestampNs = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -151,6 +156,9 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         }
         surfaceView.onResume()
         imuSource.resume()
+        // ARCore re-settles after a pause: require the 3 s of stable tracking again.
+        resetTrackingGate = true
+        idleJumpDetector.reset()
     }
 
     override fun onPause() {
@@ -238,6 +246,20 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         val session = session ?: return
         if (recorder.isRecording) return
         val next = if (savedFocusMode() == Config.FocusMode.AUTO) Config.FocusMode.FIXED else Config.FocusMode.AUTO
+        if (next == Config.FocusMode.AUTO) {
+            setFocusMode(session, next)
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Turn autofocus off?")
+            .setMessage("The team records with autofocus on. Fixed focus freezes the lens wherever it is now, " +
+                "which blurs anything at a different distance, and such recordings are not exported.")
+            .setPositiveButton("Turn off") { _, _ -> setFocusMode(session, next) }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun setFocusMode(session: Session, next: Config.FocusMode) {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
             .putBoolean(PREF_AUTOFOCUS, next == Config.FocusMode.AUTO).apply()
         applyFocusMode(session, next)
@@ -266,6 +288,17 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         val session = session ?: return
         if (recorder.isRecording || availableSizes.size < 2) return
         val next = availableSizes[(availableSizes.indexOf(currentSize) + 1) % availableSizes.size]
+        AlertDialog.Builder(this)
+            .setTitle("Change capture size?")
+            .setMessage("The team records at ${CameraConfigs.TARGET_WIDTH}×${CameraConfigs.TARGET_HEIGHT}. " +
+                "A recording at ${next.first}×${next.second} cannot be mixed with the others and will not be exported.")
+            .setPositiveButton("Change") { _, _ -> applyResolution(next) }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun applyResolution(next: Pair<Int, Int>) {
+        val session = session ?: return
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
             .putInt(PREF_WIDTH, next.first).putInt(PREF_HEIGHT, next.second).apply()
 
@@ -315,10 +348,14 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         if (recorder.isRecording) {
             stopRecording()
         } else {
-            val freeGb = (getExternalFilesDir(null)?.usableSpace ?: 0L) / 1e9
+            val freeGb = freeGb()
             if (freeGb < MIN_FREE_GB) {
-                // ~5 GB/h at 640x480; running out mid-take corrupts nothing but loses the rest.
-                Toast.makeText(this, "Only %.1f GB free: delete or export old recordings first".format(freeGb), Toast.LENGTH_LONG).show()
+                AlertDialog.Builder(this)
+                    .setTitle("Not enough space")
+                    .setMessage("Only %.1f GB free, about %.0f minutes of recording. Export and delete old recordings first."
+                        .format(freeGb, 60 * freeGb / GB_PER_HOUR))
+                    .setPositiveButton(R.string.close, null)
+                    .show()
                 return
             }
             try {
@@ -326,6 +363,8 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
                 firstFrameAgeNs = null
                 lastAlertedJumps = 0
                 wasTrackingWhileRecording = true
+                fpsWindowStartNs = 0
+                liveFps = 30.0
                 val dir = recorder.start(sessionMetadata, deviceInfo, pressedNs)
                 imuRecorder.start(dir)
                 Log.i(TAG, "Recording started: $dir")
@@ -372,6 +411,23 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             .setTitle(verdict.headline)
             .setMessage(body)
             .setPositiveButton(R.string.close, null)
+            .show()
+    }
+
+    private var handlingWriteFailure = false
+
+    private fun onWriteFailure(failure: Throwable) {
+        if (handlingWriteFailure || !recorder.isRecording) return
+        handlingWriteFailure = true
+        Log.e(TAG, "Write failed, stopping the recording", failure)
+        alert(REDO_PATTERN)
+        stopRecording()
+        AlertDialog.Builder(this)
+            .setTitle("Recording stopped: could not write")
+            .setMessage("The phone may be out of space (%.1f GB free). What was recorded up to that point is saved."
+                .format(freeGb()))
+            .setPositiveButton(R.string.close, null)
+            .setOnDismissListener { handlingWriteFailure = false }
             .show()
     }
 
@@ -433,8 +489,9 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
 
         val frame = try {
             session.update()
-        } catch (e: CameraNotAvailableException) {
-            Log.e(TAG, "Camera not available during update", e)
+        } catch (e: Throwable) {
+            Log.e(TAG, "session.update() failed", e)
+            if (recorder.isRecording) runOnUiThread { onWriteFailure(e) }
             return
         }
         backgroundRenderer.draw(frame)
@@ -497,12 +554,29 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             idleJumpDetector.onUntrackedFrame()
             false
         }
+        if (recorder.isRecording) {
+            if (fpsWindowStartNs == 0L) {
+                fpsWindowStartNs = timestampNs
+                fpsWindowStartFrames = recorder.recordedFrames
+            } else if (timestampNs - fpsWindowStartNs >= FPS_WINDOW_NS) {
+                liveFps = (recorder.recordedFrames - fpsWindowStartFrames) * 1e9 / (timestampNs - fpsWindowStartNs)
+                fpsWindowStartNs = timestampNs
+                fpsWindowStartFrames = recorder.recordedFrames
+            }
+            // A failed write (a full disk) ends the take cleanly instead of crashing the loop.
+            recorder.writeFailure?.let { failure ->
+                runOnUiThread { onWriteFailure(failure) }
+            }
+        }
+
         val armed = trackingGate.update(state == TrackingState.TRACKING, timestampNs, jumped)
         if (timestampNs - lastUiUpdateTimestampNs >= UI_UPDATE_INTERVAL_NS) {
             lastUiUpdateTimestampNs = timestampNs
             updateUi(state, camera.trackingFailureReason, armed)
         }
     }
+
+    private fun freeGb(): Double = (getExternalFilesDir(null)?.usableSpace ?: 0L) / 1e9
 
     private fun updateUi(state: TrackingState, reason: TrackingFailureReason, armed: Boolean) {
         val jumps = recorder.poseJumps
@@ -512,9 +586,11 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         val seconds = recorder.recordedDurationNs / 1e9
         val tracking = if (state == TrackingState.PAUSED && reason != TrackingFailureReason.NONE) "PAUSED ($reason)" else state.name
         val text = when {
-            recording -> "● REC  %.1f s  ·  %d frames  ·  %d dropped%s\nTracking: %s"
-                .format(seconds, frames, dropped, if (jumps > 0) "  ·  $jumps jump(s)" else "", tracking)
-            armed -> "Ready to record\nTracking: $tracking"
+            recording -> "● REC  %.1f s  ·  %d frames  ·  %.1f fps%s%s\nTracking: %s".format(
+                seconds, frames, liveFps,
+                if (dropped > 0) "  ·  $dropped dropped" else "",
+                if (jumps > 0) "  ·  $jumps jump(s)" else "", tracking)
+            armed -> "Ready to record  ·  %.0f min of space left\nTracking: %s".format(60 * freeGb() / GB_PER_HOUR, tracking)
             state == TrackingState.TRACKING -> "Stabilizing, keep moving slowly…\nTracking: $tracking"
             else -> "Move the phone slowly to start tracking…\nTracking: $tracking"
         }
@@ -526,6 +602,10 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             recordButton.isEnabled = recording || armed
             resolutionButton.isEnabled = !recording && availableSizes.size > 1
             focusButton.isEnabled = !recording
+            val offProtocol = currentSize != (CameraConfigs.TARGET_WIDTH to CameraConfigs.TARGET_HEIGHT) ||
+                savedFocusMode() != Config.FocusMode.AUTO
+            resolutionButton.setTextColor(if (offProtocol) 0xFFFF5252.toInt() else 0xFFFFFFFF.toInt())
+            focusButton.setTextColor(if (offProtocol) 0xFFFF5252.toInt() else 0xFFFFFFFF.toInt())
             sessionsButton.isEnabled = !recording
         }
     }
@@ -544,12 +624,17 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         const val TAG = "PoseCam"
         const val CAMERA_PERMISSION_REQUEST = 1
         const val UI_UPDATE_INTERVAL_NS = 200_000_000L
-        const val JPEG_QUALITY = 90
+        // 75 halves the storage a take needs and costs less fidelity than the H.264 export
+        // step already does at the 256x256 the consumer trains on (measured on real frames).
+        const val JPEG_QUALITY = 75
+        const val FPS_WINDOW_NS = 3_000_000_000L
         const val PREFS = "posecam"
         const val PREF_WIDTH = "cpu_image_width"
         const val PREF_HEIGHT = "cpu_image_height"
         const val PREF_AUTOFOCUS = "autofocus"
-        const val MIN_FREE_GB = 1.0
+        // ~7 GB/h at 640x480, so 4 GB is about half an hour of headroom.
+        const val MIN_FREE_GB = 4.0
+        const val GB_PER_HOUR = 7.0
         // Distinct rhythms so they can be told apart without looking.
         val LOST_TRACKING_PATTERN = longArrayOf(0, 400)
         val JUMP_PATTERN = longArrayOf(0, 120, 100, 120, 100, 120)

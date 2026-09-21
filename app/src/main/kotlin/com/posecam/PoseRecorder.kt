@@ -2,6 +2,7 @@ package com.posecam
 
 import java.io.BufferedWriter
 import java.io.File
+import java.io.IOException
 import java.security.SecureRandom
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -48,6 +49,14 @@ class PoseRecorder(
     private var gapStartNs: Long? = null
     private var longestGapNs = 0L
     private var rowsSinceFlush = 0
+
+    /**
+     * Set when a write fails (a full disk, most likely). The frame loop stops writing and the
+     * UI ends the take cleanly, so the session stays readable instead of the app crashing.
+     */
+    @Volatile var writeFailure: Throwable? = null
+        private set
+
     private val intrinsics = IntrinsicsTracker()
     private val jumpDetector = PoseJumpDetector()
     private var lastIntrinsicsFrame = -1L
@@ -119,6 +128,7 @@ class PoseRecorder(
         gapStartNs = null
         longestGapNs = 0
         rowsSinceFlush = 0
+        writeFailure = null
         intrinsics.reset()
         jumpDetector.reset()
         lastIntrinsicsFrame = -1
@@ -181,11 +191,16 @@ class PoseRecorder(
                 jumpDetector.onUntrackedFrame()
                 PoseCsv.untrackedRow(frameCount, timestampNs, trackingState, imageStatus)
             }
-            out.write(row)
-            out.newLine()
-            metadataWriter?.let {
-                it.write(FrameMetadata.row(frameCount, timestampNs, metadata))
-                it.newLine()
+            try {
+                out.write(row)
+                out.newLine()
+                metadataWriter?.let {
+                    it.write(FrameMetadata.row(frameCount, timestampNs, metadata))
+                    it.newLine()
+                }
+            } catch (e: IOException) {
+                if (writeFailure == null) writeFailure = e
+                return
             }
             metadataSummary.add(metadata)
 
@@ -193,8 +208,12 @@ class PoseRecorder(
             lastTimestampNs = timestampNs
             frameCount++
             if (++rowsSinceFlush >= FLUSH_EVERY_ROWS) {
-                out.flush()
-                metadataWriter?.flush()
+                try {
+                    out.flush()
+                    metadataWriter?.flush()
+                } catch (e: IOException) {
+                    if (writeFailure == null) writeFailure = e
+                }
                 rowsSinceFlush = 0
             }
         }
@@ -207,7 +226,7 @@ class PoseRecorder(
     fun stop(extra: Map<String, Any?> = emptyMap(), wallTimeMs: Long = System.currentTimeMillis()): Summary? {
         val frames = synchronized(lock) {
             val out = writer ?: return null
-            out.close()
+            runCatching { out.close() }   // a failed close must not lose the rest of the session
             writer = null
             metadataWriter?.close()
             metadataWriter = null
@@ -254,6 +273,7 @@ class PoseRecorder(
             "frame_count" to frameCount,
             "tracked_frame_count" to trackedCount,
             "longest_tracking_gap_s" to Math.round(longestGapNs / 1e6) / 1000.0,
+            "write_failure" to writeFailure?.toString(),
             "first_timestamp_ns" to firstTimestampNs,
             "last_timestamp_ns" to lastTimestampNs,
             // Downstream action labels are frame strides, so the achieved rate matters.

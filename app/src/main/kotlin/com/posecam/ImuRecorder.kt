@@ -2,6 +2,7 @@ package com.posecam
 
 import java.io.BufferedWriter
 import java.io.File
+import java.io.IOException
 
 /**
  * Writes imu.csv. Samples arrive on the sensor thread; start/stop come from the UI thread.
@@ -59,12 +60,17 @@ class ImuRecorder(private val preRollNs: Long = 1_000_000_000L) {
     }
 
     private fun write(out: BufferedWriter, timestampNs: Long, sensor: String, values: FloatArray, valueCount: Int) {
-        out.write(row(timestampNs, sensor, values, valueCount))
-        out.newLine()
+        try {
+            out.write(row(timestampNs, sensor, values, valueCount))
+            out.newLine()
+        } catch (e: IOException) {
+            writer = null   // a full disk: stop writing IMU rows, the pose loop reports the failure
+            return
+        }
         stats[sensor] = stats[sensor]?.let { it.copy(count = it.count + 1, lastTimestampNs = timestampNs) }
             ?: SensorStats(1, timestampNs, timestampNs)
         if (++rowsSinceFlush >= FLUSH_EVERY_ROWS) {
-            out.flush()
+            runCatching { out.flush() }
             rowsSinceFlush = 0
         }
     }
@@ -72,7 +78,7 @@ class ImuRecorder(private val preRollNs: Long = 1_000_000_000L) {
     /** Returns per-sensor stats for manifest.json, or null if not recording. */
     fun stop(): Map<String, Any?>? = synchronized(lock) {
         val out = writer ?: return null
-        out.close()
+        runCatching { out.close() }
         writer = null
         stats.mapValuesTo(linkedMapOf()) { (_, s) ->
             linkedMapOf(

@@ -62,6 +62,7 @@ class FrameWriter(
             } catch (e: Exception) {
                 synchronized(failed) { failed.add(frameIndex) }
                 if (firstError == null) firstError = "frame $frameIndex: $e"
+                runCatching { File(framesDir, "${fileName(frameIndex, timestampNs)}.tmp").delete() }
             } finally {
                 pool.release(buffer)
             }

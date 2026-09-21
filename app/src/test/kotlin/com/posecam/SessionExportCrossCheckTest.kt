@@ -35,8 +35,9 @@ class SessionExportCrossCheckTest {
             val export = SessionExport(posesFile.bufferedReader().use { SessionExport.parsePoses(it) })
             val segments = export.segments().filter { export.secondsOf(it) >= SessionExport.MIN_SECONDS }
             val report = StringBuilder()
-            for (segment in segments) {
-                val stem = SessionExport.stem(SessionExport.epochMs(export.timestampNs(segment.first), startWallMs, pressed))
+            for ((n, segment) in segments.withIndex()) {
+                val stem = SessionExport.stem(
+                    SessionExport.epochMs(export.timestampNs(segment.first), startWallMs, pressed), session.name, n)
                 report.append("SEGMENT $stem rows=${segment.first}-${segment.last} frames=${segment.size} " +
                     "interpolated=${segment.interpolated.size} reused=${segment.reusedImages.size}\n")
                 val lines = File(out, "${session.name}__$stem.txt").bufferedWriter()

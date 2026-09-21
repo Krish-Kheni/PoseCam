@@ -28,3 +28,7 @@ exports/
 
 # Shareable APK builds
 dist/
+
+# Signing: the keystore lives outside the repo; this file holds its passwords
+keystore.properties
+keys/

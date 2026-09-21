@@ -84,6 +84,10 @@ class SessionExport(
      * Short tracking gaps get interpolated poses: deleting the rows instead would turn a gap
      * into one huge apparent motion, and the consumer cannot mask interior rows. The cap keeps
      * fabricated motion shorter than its 8-frame action stride.
+     *
+     * A gap whose ends are further apart than any real motion is a relocalization that happened
+     * while tracking was lost. Interpolating that would invent smooth motion nothing downstream
+     * could detect, so it is left as a gap and splits the take instead.
      */
     private fun fillShortGaps() {
         val tracked = rows.indices.filter { rows[it].tracked }
@@ -92,6 +96,7 @@ class SessionExport(
             val b = tracked[n + 1]
             val gap = b - a - 1
             if (gap <= 0 || gap > holdMaxFrames) continue
+            if (isDiscontinuity(a, b)) continue
             val qa = quaternion[a]!!
             val qb = DoubleArray(4) { quaternion[b]!![it] }
             var dot = 0.0
@@ -106,6 +111,21 @@ class SessionExport(
                 interpolatedRows.add(j)
             }
         }
+    }
+
+    /** True when the motion between two tracked rows is faster than any real hand movement. */
+    private fun isDiscontinuity(a: Int, b: Int): Boolean {
+        val dt = (rows[b].timestampNs - rows[a].timestampNs) / 1e9
+        if (dt <= 0) return true
+        var sum = 0.0
+        for (k in 0..2) {
+            val d = rows[b].position!![k] - rows[a].position!![k]
+            sum += d * d
+        }
+        var dot = 0.0
+        for (k in 0..3) dot += rows[b].quaternion!![k] * rows[a].quaternion!![k]
+        val angle = 2 * acos(min(1.0, abs(dot)))
+        return sqrt(sum) / dt > PoseJumpDetector.MAX_SPEED_M_PER_S || angle / dt > PoseJumpDetector.MAX_RATE_RAD_PER_S
     }
 
     /** A dropped image reuses the previous frame's JPEG rather than breaking the run. */
@@ -218,9 +238,17 @@ class SessionExport(
         fun epochMs(timestampNs: Long, startWallMs: Long, recordPressedElapsedNs: Long): Long =
             startWallMs + Math.round((timestampNs - recordPressedElapsedNs) / 1e6)
 
-        /** AnySense names its folders in local time. */
-        fun stem(epochMs: Long): String =
-            SimpleDateFormat("yyyy-MM-dd-HH_mm_ss", Locale.US).format(Date(epochMs))
+        /**
+         * Folder name for one exported demo: UTC so the phone and the analysis machine agree,
+         * plus the session's random suffix and the segment number, so re-exports are
+         * recognisable and two demos can never collide.
+         */
+        fun stem(epochMs: Long, sessionName: String, segmentIndex: Int): String {
+            val when_ = SimpleDateFormat("yyyy-MM-dd-HH_mm_ss", Locale.US)
+                .apply { timeZone = TimeZone.getTimeZone("UTC") }
+                .format(Date(epochMs))
+            return "$when_-${sessionName.substringAfterLast('-')}-s${segmentIndex + 1}"
+        }
 
         fun parseWallTime(iso: String): Long =
             SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)

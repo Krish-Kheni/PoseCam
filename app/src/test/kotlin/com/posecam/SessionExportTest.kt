@@ -87,6 +87,28 @@ class SessionExportTest {
     }
 
     @Test
+    fun aGapHidingARelocalizationIsNotInterpolated() {
+        // 3 untracked rows, and the pose on the far side is 1 m away: a relocalization, not motion
+        val out = StringBuilder(PoseCsv.HEADER).append('\n')
+        for (i in 0 until 20) {
+            val ts = i * frameNs
+            if (i in 8..10) {
+                out.append(PoseCsv.untrackedRow(i.toLong(), ts, "PAUSED:INSUFFICIENT_FEATURES", PoseCsv.IMAGE_SAVED))
+            } else {
+                val x = i * 0.01f + if (i > 10) 1.0f else 0f
+                out.append(PoseCsv.trackedRow(i.toLong(), ts, floatArrayOf(x, 0f, 0f), floatArrayOf(0f, 0f, 0f, 1f), PoseCsv.IMAGE_SAVED))
+            }
+            out.append('\n')
+        }
+        val export = SessionExport(SessionExport.parsePoses(BufferedReader(StringReader(out.toString()))))
+        val segments = export.segments()
+        assertEquals(2, segments.size)   // split, not bridged with invented motion
+        assertEquals(0 to 7, segments[0].first to segments[0].last)
+        assertEquals(11 to 19, segments[1].first to segments[1].last)
+        assertTrue(segments.all { it.interpolated.isEmpty() })
+    }
+
+    @Test
     fun aDroppedImageReusesThePreviousFrame() {
         val export = SessionExport(SessionExport.parsePoses(csv(10, dropped = setOf(4))))
         assertEquals(1, export.segments().size)
@@ -111,7 +133,9 @@ class SessionExportTest {
         val pressedNs = 2_000_000_000L
         assertEquals(startWallMs - 100, SessionExport.epochMs(1_900_000_000L, startWallMs, pressedNs))
         assertEquals(startWallMs, SessionExport.epochMs(pressedNs, startWallMs, pressedNs))
-        assertTrue(SessionExport.stem(startWallMs).matches(Regex("\\d{4}-\\d{2}-\\d{2}-\\d{2}_\\d{2}_\\d{2}")))
+        // UTC, so the phone and the analysis machine name the same demo identically
+        assertEquals("2026-09-18-14_48_39-06f6db-s2",
+            SessionExport.stem(startWallMs, "capture-20260918T201839-06f6db", 1))
         // 2026-09-18T10:48:39.796Z in epoch ms, independent of this machine's time zone
         assertEquals(1789728519796L, SessionExport.parseWallTime("2026-09-18T10:48:39.796Z"))
     }

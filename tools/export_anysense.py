@@ -57,6 +57,7 @@ from posecam_io import frame_path, load_json, load_poses  # noqa: E402
 # Same thresholds as the app's PoseJumpDetector and check_sync.py.
 JUMP_SPEED_M_S = 3.0
 JUMP_RATE_RAD_S = 10.0
+OFF_PROTOCOL: list[str] = []   # set in main(); recorded in each export's provenance
 
 
 def jump_rows(poses) -> list[int]:
@@ -77,13 +78,22 @@ def jump_rows(poses) -> list[int]:
 def fill_short_gaps(poses, hold_max: int) -> tuple[np.ndarray, np.ndarray, list[int]]:
     """Returns (position, quat, filled_rows): copies where untracked runs of at most
     [hold_max] rows between two tracked rows are linearly interpolated (translation lerp,
-    quaternion nlerp with sign alignment). Longer runs stay NaN."""
+    quaternion nlerp with sign alignment). Longer runs stay NaN.
+
+    A gap whose end points are further apart than any real motion is a relocalization that
+    happened while tracking was lost: interpolating it would invent smooth motion that no
+    check can see afterwards, so it is left as a gap and splits the take instead."""
     pos, quat = poses.position.copy(), poses.quat_xyzw.copy()
     filled = []
     tracked = np.flatnonzero(poses.tracked)
     for a, b in zip(tracked, tracked[1:]):
         gap = b - a - 1
         if gap == 0 or gap > hold_max:
+            continue
+        dt = (poses.timestamp_ns[b] - poses.timestamp_ns[a]) / 1e9
+        step = float(np.linalg.norm(poses.position[b] - poses.position[a]))
+        angle = 2 * np.arccos(min(1.0, abs(float(np.dot(poses.quat_xyzw[a], poses.quat_xyzw[b])))))
+        if dt <= 0 or step / dt > JUMP_SPEED_M_S or angle / dt > JUMP_RATE_RAD_S:
             continue
         qa, qb = quat[a], quat[b]
         if np.dot(qa, qb) < 0:
@@ -130,6 +140,31 @@ def segments(poses, has_pose: np.ndarray, image_source: list[int | None], breaks
     if current:
         out.append(current)
     return out
+
+
+def stem(epoch_ms_value: int, session: Path, segment_index: int) -> str:
+    """Folder name for one exported demo. UTC so two machines agree, plus the source
+    session's random suffix and the segment number so re-exports are recognisable and two
+    demos can never collide."""
+    when = datetime.fromtimestamp(epoch_ms_value / 1000, tz=timezone.utc).strftime("%Y-%m-%d-%H_%M_%S")
+    suffix = session.name.rsplit("-", 1)[-1]
+    return f"{when}-{suffix}-s{segment_index + 1}"
+
+
+def check_protocol(manifest: dict, force: bool) -> list[str]:
+    """The team records one way; a session recorded any other way is not comparable."""
+    camera = manifest.get("camera_config", {})
+    problems = []
+    if list(camera.get("cpu_image_size", [])) != [640, 480]:
+        problems.append(f"image size {camera.get('cpu_image_size')} is not the locked 640x480")
+    if list(camera.get("fps_range", [])) != [30, 30]:
+        problems.append(f"camera fps range {camera.get('fps_range')} is not 30")
+    if manifest.get("focus_mode") not in (None, "AUTO"):
+        problems.append(f"focus mode {manifest.get('focus_mode')} is not AUTO")
+    measured = manifest.get("measured_fps")
+    if measured is not None and abs(measured - 30.0) > 0.6:
+        problems.append(f"measured {measured} fps, not 30 (the consumer's action stride is 8 frames at 30 fps)")
+    return problems
 
 
 def epoch_ms(manifest: dict, timestamp_ns: np.ndarray) -> np.ndarray:
@@ -193,15 +228,13 @@ def count_frames(video: Path) -> int:
 
 
 def export_segment(args, poses, manifest, chosen, pos, quat, filled, held, image_source, jumps,
-                   label, segments_total, used_stems: set[str]) -> Path:
+                   label, segments_total, used_stems: set[str], segment_index: int) -> Path:
     """Writes one <stem>/ folder for the rows in [chosen]; returns the folder."""
     seconds = (poses.timestamp_ns[chosen[-1]] - poses.timestamp_ns[chosen[0]]) / 1e9
     filled_in = [j for j in filled if chosen[0] <= j <= chosen[-1]]
     held_in = [j for j in held if chosen[0] <= j <= chosen[-1]]
     ms = epoch_ms(manifest, poses.timestamp_ns[chosen])
-    stamp = datetime.fromtimestamp(ms[0] / 1000).strftime("%Y-%m-%d-%H_%M_%S")  # local time, as AnySense
-    while stamp in used_stems:  # two segments starting within the same second
-        stamp += "b"
+    stamp = stem(int(ms[0]), args.session, segment_index)
     used_stems.add(stamp)
     out_dir = args.out / stamp
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -240,6 +273,7 @@ def export_segment(args, poses, manifest, chosen, pos, quat, filled, held, image
         "interpolated_pose_rows": filled_in,
         "reused_previous_image_rows": held_in,
         "measured_fps": manifest.get("measured_fps"),
+        "off_protocol": OFF_PROTOCOL,
         "video": {"rotation_deg_clockwise": args.rotate, "size": size or "native rotated",
                   "fps": "variable (real timing)" if args.vfr else args.fps},
         "intrinsics_landscape": {k: manifest.get("camera_config", {}).get(k) for k in ("cpu_image_size",)},
@@ -267,6 +301,8 @@ def main():
     parser.add_argument("--fps", type=float, default=30.0, help="nominal frame rate written to the MP4")
     parser.add_argument("--vfr", action="store_true", help="keep each frame's real timing instead of a constant rate")
     parser.add_argument("--min-seconds", type=float, default=3.0, help="skip segments shorter than this")
+    parser.add_argument("--force", action="store_true",
+                        help="export even when the session was not recorded with the team's settings")
     args = parser.parse_args()
 
     for tool in ("ffmpeg", "ffprobe"):
@@ -277,6 +313,13 @@ def main():
     manifest = load_json(args.session, "manifest.json")
     if not manifest.get("complete", True):
         sys.exit("manifest says the recording did not stop cleanly")
+    off_protocol = check_protocol(manifest, args.force)
+    if off_protocol:
+        message = "not recorded with the team's settings:\n  " + "\n  ".join(off_protocol)
+        if not args.force:
+            sys.exit(f"{args.session.name} {message}\nUse --force to export it anyway (it will not be comparable).")
+        print(f"WARNING: {args.session.name} {message}")
+    globals()["OFF_PROTOCOL"] = off_protocol
 
     jumps = jump_rows(poses)
     pos, quat, filled = fill_short_gaps(poses, args.hold_max_frames)
@@ -295,7 +338,7 @@ def main():
     if args.all:
         chosen = [i for s in segs for i in s]
         export_segment(args, poses, manifest, chosen, pos, quat, filled, held, image_source, jumps,
-                       "all frames (debug)", len(segs), used)
+                       "all frames (debug)", len(segs), used, 0)
         return
     if args.segment is not None:
         segs = [(args.segment, segs[args.segment])]
@@ -307,7 +350,7 @@ def main():
             print(f"  segment {n}: rows {seg[0]}-{seg[-1]}, {seconds_of(seg):.1f} s, skipped (< {args.min_seconds} s)")
             continue
         export_segment(args, poses, manifest, seg, pos, quat, filled, held, image_source, jumps,
-                       f"segment {n}", len(segs), used)
+                       f"segment {n}", len(segs), used, n)
         written += 1
     if written == 0:
         sys.exit("no segment long enough to export")

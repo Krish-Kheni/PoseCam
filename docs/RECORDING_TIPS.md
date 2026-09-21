@@ -22,6 +22,8 @@ permission, and install "Google Play Services for AR" if the phone asks.
 
 ## Each demo
 
+**One recording is one demo.** Press Record, do a single demonstration, press Stop.
+
 1. Hold the gripper **wide open** to start.
 2. Wait until the top bar says **"Ready to record"** — about three seconds; move the phone
    gently while you wait. The button stays off until then on purpose: the tracking needs a
@@ -45,12 +47,15 @@ position jumps, the phone **vibrates**:
 Open **Recordings** in the app and tap a recording:
 
 - **Export for pipeline (MP4)** — the small version to send (about 45 MB per 2.5 minutes).
+  If a recording was made with changed settings, this refuses to export it: leave the
+  **640×480** and **Focus: auto** buttons alone (they turn red if changed).
   It asks which way the phone is mounted the first time; pick the option that makes the
   jaws point **up** in the video, and it remembers. Then **Share** it, or **Save to
   Downloads** and copy it over USB.
 - **Share raw recording (zip)** — everything (about 250 MB per 2.5 minutes). Only send this
   if asked for it.
 - **Delete** — once the export has been sent, to free up space. Recording needs about
-  **5 GB per hour** free; the app refuses to start below 1 GB.
+  **4 GB per hour** free; the app refuses to start below 4 GB and shows how many minutes
+  of space are left next to "Ready to record".
 
 Keep the raw recording until whoever processes it confirms the export arrived.

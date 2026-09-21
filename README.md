@@ -18,11 +18,20 @@ Requires the Android SDK (`ANDROID_HOME`) and a phone with USB debugging and
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
+Release builds (what collectors get) need `keystore.properties` in the repository root
+pointing at the signing keystore, which lives outside the repository and is **not**
+recoverable if lost — every phone would have to uninstall, deleting any recordings still
+on it, before it could install a future build:
+
+```bash
+./gradlew assembleRelease          # app/build/outputs/apk/release/app-release.apk
+```
+
 ## Use
 
 1. Open PoseCam and allow camera access.
 2. Move the phone slowly until the status bar says **Ready to record**
-   (tracking has been stable for 1 s).
+   (3 s of continuous, jump-free tracking).
 3. **Record**, capture, **Stop**.
 
 ## Get the data

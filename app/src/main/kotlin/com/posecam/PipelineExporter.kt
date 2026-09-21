@@ -20,6 +20,25 @@ object PipelineExporter {
 
     class Result(val folders: List<File>, val frames: Int, val skipped: Int, val bytes: Long)
 
+    /** The team records one way; a session recorded any other way is not comparable. */
+    fun offProtocol(manifest: JSONObject): List<String> {
+        val camera = manifest.optJSONObject("camera_config")
+        val size = camera?.optJSONArray("cpu_image_size")
+        val fpsRange = camera?.optJSONArray("fps_range")
+        val problems = mutableListOf<String>()
+        if (size == null || size.optInt(0) != 640 || size.optInt(1) != 480) {
+            problems.add("recorded at ${size?.optInt(0)}x${size?.optInt(1)}, not the team's 640x480")
+        }
+        if (fpsRange != null && (fpsRange.optInt(0) != 30 || fpsRange.optInt(1) != 30)) {
+            problems.add("camera set to ${fpsRange.optInt(0)}-${fpsRange.optInt(1)} fps, not 30")
+        }
+        val focus = manifest.optString("focus_mode", "AUTO")
+        if (focus != "AUTO") problems.add("focus was $focus, not auto")
+        val measured = manifest.optDouble("measured_fps", 30.0)
+        if (Math.abs(measured - 30.0) > 0.6) problems.add("recorded at %.1f fps, not 30".format(measured))
+        return problems
+    }
+
     /**
      * @param rotateDegrees clockwise rotation of the image so the gripper jaws point up
      * @param outputRoot emptied and filled with one folder per exported segment
@@ -35,6 +54,11 @@ object PipelineExporter {
         val manifest = JSONObject(File(session, "manifest.json").readText())
         if (!manifest.optBoolean("complete", true)) {
             throw ExportException("This recording did not stop cleanly and cannot be exported.")
+        }
+        val problems = offProtocol(manifest)
+        if (problems.isNotEmpty()) {
+            throw ExportException("This recording was ${problems.joinToString("; ")}. " +
+                "It cannot be mixed with the rest of the dataset, so it is not exported.")
         }
         val startWallMs = SessionExport.parseWallTime(manifest.getString("start_wall_time_utc"))
         // posecam-3 and earlier have no Record-tap stamp; the first frame predates it by ~100 ms.
@@ -62,10 +86,9 @@ object PipelineExporter {
         val stems = mutableSetOf<String>()
 
         for ((n, segment) in usable.withIndex()) {
-            var stem = SessionExport.stem(
-                SessionExport.epochMs(export.timestampNs(segment.first), startWallMs, pressedNs)
+            val stem = SessionExport.stem(
+                SessionExport.epochMs(export.timestampNs(segment.first), startWallMs, pressedNs), session.name, n
             )
-            while (stem in stems) stem += "b"   // two segments starting in the same second
             stems.add(stem)
 
             val folder = File(outputRoot, stem)
