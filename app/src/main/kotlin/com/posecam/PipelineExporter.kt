@@ -72,7 +72,9 @@ object PipelineExporter {
         val rows = File(session, "poses.csv").bufferedReader().use { SessionExport.parsePoses(it) }
         val export = SessionExport(rows)
         val segments = export.segments()
-        val usable = segments.filter { export.secondsOf(it) >= minSeconds }
+        // Numbered by position among ALL segments, so a stem keeps its name even if the
+        // minimum length changes and short stretches drop in or out (matches the PC exporter).
+        val usable = segments.withIndex().filter { export.secondsOf(it.value) >= minSeconds }
         if (usable.isEmpty()) {
             throw ExportException(
                 "Nothing to export: no stretch of at least ${minSeconds.toInt()} s without tracking loss or a pose jump."
@@ -85,7 +87,8 @@ object PipelineExporter {
         var frames = 0
         val stems = mutableSetOf<String>()
 
-        for ((n, segment) in usable.withIndex()) {
+        for ((position, indexed) in usable.withIndex()) {
+            val (n, segment) = indexed
             val stem = SessionExport.stem(
                 SessionExport.epochMs(export.timestampNs(segment.first), startWallMs, pressedNs), session.name, n
             )
@@ -100,7 +103,7 @@ object PipelineExporter {
             val missing = files.filterNot { it.exists() }
             if (missing.isNotEmpty()) throw ExportException("Missing frame ${missing.first().name}")
 
-            val label = "Recording ${n + 1} of ${usable.size}"
+            val label = "Recording ${position + 1} of ${usable.size}"
             val written = Mp4Writer.encode(
                 files, File(folder, "RGB_$stem.mp4"), fps = fps, rotateDegrees = rotateDegrees,
             ) { done, total -> onProgress(label, done, total) }
@@ -115,7 +118,7 @@ object PipelineExporter {
                 }
             }
             File(folder, "posecam_export.json").writeText(
-                provenance(session, manifest, export, segment, n, usable.size, rotateDegrees, fps, appVersion) + "\n"
+                provenance(session, manifest, export, segment, position, usable.size, rotateDegrees, fps, appVersion) + "\n"
             )
             folders.add(folder)
             frames += written

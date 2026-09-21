@@ -33,9 +33,11 @@ class SessionExportCrossCheckTest {
             val startWallMs = SessionExport.parseWallTime(startWall)
 
             val export = SessionExport(posesFile.bufferedReader().use { SessionExport.parsePoses(it) })
-            val segments = export.segments().filter { export.secondsOf(it) >= SessionExport.MIN_SECONDS }
+            // Keep the index among ALL segments: that is what names the exported folder.
+            val segments = export.segments().withIndex()
+                .filter { export.secondsOf(it.value) >= SessionExport.MIN_SECONDS }
             val report = StringBuilder()
-            for ((n, segment) in segments.withIndex()) {
+            for ((n, segment) in segments) {
                 val stem = SessionExport.stem(
                     SessionExport.epochMs(export.timestampNs(segment.first), startWallMs, pressed), session.name, n)
                 report.append("SEGMENT $stem rows=${segment.first}-${segment.last} frames=${segment.size} " +
