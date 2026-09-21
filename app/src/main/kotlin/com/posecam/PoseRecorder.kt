@@ -22,6 +22,7 @@ class PoseRecorder(
 ) {
     data class Summary(
         val directory: File, val frameCount: Long, val imagesSaved: Long, val imagesDropped: Long, val poseJumps: Int,
+        val trackedFrames: Long, val seconds: Double, val longestGapSeconds: Double,
     )
 
     /** Buffers for image capture; the GL thread grabs from here. */
@@ -44,6 +45,8 @@ class PoseRecorder(
     private var writerStats: FrameWriter.Stats? = null
     private var firstTimestampNs: Long? = null
     private var lastTimestampNs: Long? = null
+    private var gapStartNs: Long? = null
+    private var longestGapNs = 0L
     private var rowsSinceFlush = 0
     private val intrinsics = IntrinsicsTracker()
     private val jumpDetector = PoseJumpDetector()
@@ -113,6 +116,8 @@ class PoseRecorder(
         writerStats = null
         firstTimestampNs = null
         lastTimestampNs = null
+        gapStartNs = null
+        longestGapNs = 0
         rowsSinceFlush = 0
         intrinsics.reset()
         jumpDetector.reset()
@@ -167,9 +172,12 @@ class PoseRecorder(
 
             val row = if (translation != null && rotation != null) {
                 trackedCount++
+                gapStartNs?.let { longestGapNs = maxOf(longestGapNs, timestampNs - it) }
+                gapStartNs = null
                 jumpDetector.onTrackedFrame(frameCount, timestampNs, translation, rotation)
                 PoseCsv.trackedRow(frameCount, timestampNs, translation, rotation, imageStatus)
             } else {
+                if (gapStartNs == null) gapStartNs = lastTimestampNs ?: timestampNs
                 jumpDetector.onUntrackedFrame()
                 PoseCsv.untrackedRow(frameCount, timestampNs, trackingState, imageStatus)
             }
@@ -215,6 +223,9 @@ class PoseRecorder(
             Summary(
                 directory!!, frameCount, stats.written,
                 droppedByReason.values.sum() + stats.failedFrameIndices.size, jumpDetector.count,
+                trackedCount, recordedDurationNs / 1e9,
+                // an unfinished gap still counts: the take ended while tracking was lost
+                maxOf(longestGapNs, gapStartNs?.let { (lastTimestampNs ?: it) - it } ?: 0L) / 1e9,
             )
         }
     }
@@ -242,6 +253,7 @@ class PoseRecorder(
             "complete" to (stopWallTime != null),
             "frame_count" to frameCount,
             "tracked_frame_count" to trackedCount,
+            "longest_tracking_gap_s" to Math.round(longestGapNs / 1e6) / 1000.0,
             "first_timestamp_ns" to firstTimestampNs,
             "last_timestamp_ns" to lastTimestampNs,
             // Downstream action labels are frame strides, so the achieved rate matters.

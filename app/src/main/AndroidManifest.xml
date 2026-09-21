@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Without it, Android 12+ caps SENSOR_DELAY_FASTEST at 200 Hz. Install-time permission. -->
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
+    <!-- The phone sits on the gripper facing away: problems are signalled by vibration. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <uses-feature android:name="android.hardware.camera.ar" android:required="true" />
     <uses-feature android:glEsVersion="0x00020000" android:required="true" />

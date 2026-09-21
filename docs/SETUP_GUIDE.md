@@ -61,6 +61,10 @@ Requirements from the training pipeline (cap_tools), for gripper demonstrations:
   motion blurs (seen on the Tecno takes). A desk lamp on the workspace is enough.
 - **Wait for "Ready to record"** (about 3 s of stable tracking) and move the phone
   gently while waiting; ARCore is still settling its scale in the first seconds.
+- Nobody needs to watch the screen: the phone **vibrates** on tracking loss (one long
+  buzz) and on a pose jump (three short buzzes), and every take ends with a verdict
+  dialog saying whether to redo it. See [RECORDING_TIPS.md](RECORDING_TIPS.md), the
+  one-page handout for collectors.
 
 Good habits:
 
@@ -71,6 +75,15 @@ Good habits:
 - Don't switch apps or lock the screen mid-recording; that ends the recording.
 
 ## 4. Get recordings onto a computer
+
+**The short way (no computer needed):** in the app, **Recordings → Export for pipeline
+(MP4)** produces the folder the training pipeline reads (`RGB_<stem>.mp4` +
+`AR_Pose_<stem>.txt`, one folder per clean segment), about a fifth of the size of the raw
+recording, and shares or saves it as a zip. It applies the same rules as
+`tools/export_anysense.py` and is verified against it byte for byte on real recordings.
+It asks once which way the phone is mounted (the jaws must point up in the video).
+
+**The full way (raw data, for diagnostics and calibration):**
 
 Recordings are stored in the app's private folder
 (`Android/data/com.posecam/files/captures/`), which file managers cannot browse on

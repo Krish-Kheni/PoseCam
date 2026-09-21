@@ -2,6 +2,7 @@ package com.posecam
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -10,6 +11,9 @@ import android.opengl.GLSurfaceView
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.provider.Settings
 import android.util.Log
 import android.view.WindowManager
@@ -72,6 +76,8 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
     private var viewportHeight = 0
     private var viewportChanged = false
     private var lastLoggedState = ""
+    private var lastAlertedJumps = 0
+    private var wasTrackingWhileRecording = true
     private var lastUiUpdateTimestampNs = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -318,6 +324,8 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             try {
                 val pressedNs = SystemClock.elapsedRealtimeNanos()
                 firstFrameAgeNs = null
+                lastAlertedJumps = 0
+                wasTrackingWhileRecording = true
                 val dir = recorder.start(sessionMetadata, deviceInfo, pressedNs)
                 imuRecorder.start(dir)
                 Log.i(TAG, "Recording started: $dir")
@@ -346,13 +354,37 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
     private fun onRecordingStopped(summary: PoseRecorder.Summary) {
         Log.i(TAG, "Recording stopped: $summary")
         recordButton.text = getString(R.string.record)
-        Toast.makeText(
-            this,
-            "Saved ${summary.frameCount} poses, ${summary.imagesSaved} images" +
-                (if (summary.imagesDropped > 0) ", ${summary.imagesDropped} dropped" else "") +
-                (if (summary.poseJumps > 0) ", ${summary.poseJumps} POSE JUMP(S)" else ""),
-            Toast.LENGTH_LONG,
-        ).show()
+        val verdict = TakeVerdict.of(
+            summary.seconds, summary.frameCount, summary.trackedFrames, summary.poseJumps,
+            summary.longestGapSeconds, summary.imagesDropped,
+        )
+        if (verdict.redo) alert(REDO_PATTERN)
+        val body = buildString {
+            append(verdict.detail)
+            if (verdict.reasons.isNotEmpty()) {
+                append("\n\n")
+                append(verdict.reasons.joinToString("\n") { "• $it" })
+            }
+            append("\n\nSaved as ")
+            append(summary.directory.name)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(verdict.headline)
+            .setMessage(body)
+            .setPositiveButton(R.string.close, null)
+            .show()
+    }
+
+    /** Vibrates: the phone is on a gripper, pointed away, and nobody is watching the screen. */
+    private fun alert(pattern: LongArray) {
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (getSystemService(VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(VIBRATOR_SERVICE) as Vibrator
+        }
+        if (!vibrator.hasVibrator()) return
+        vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1))
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -442,6 +474,18 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             lastLoggedState = stateLabel
         }
 
+        // Tell the collector the moment something goes wrong, so nobody has to watch a counter.
+        if (recorder.isRecording) {
+            val tracking = state == TrackingState.TRACKING
+            if (!tracking && wasTrackingWhileRecording) alert(LOST_TRACKING_PATTERN)
+            wasTrackingWhileRecording = tracking
+            val jumps = recorder.poseJumps
+            if (jumps > lastAlertedJumps) {
+                lastAlertedJumps = jumps
+                alert(JUMP_PATTERN)
+            }
+        }
+
         if (resetTrackingGate) {
             resetTrackingGate = false
             trackingGate.update(false, timestampNs)
@@ -476,6 +520,9 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         }
         runOnUiThread {
             statusView.text = text
+            statusView.setBackgroundColor(
+                if (recording && state != TrackingState.TRACKING) 0xCCB00020.toInt() else 0x99000000.toInt()
+            )
             recordButton.isEnabled = recording || armed
             resolutionButton.isEnabled = !recording && availableSizes.size > 1
             focusButton.isEnabled = !recording
@@ -503,5 +550,9 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         const val PREF_HEIGHT = "cpu_image_height"
         const val PREF_AUTOFOCUS = "autofocus"
         const val MIN_FREE_GB = 1.0
+        // Distinct rhythms so they can be told apart without looking.
+        val LOST_TRACKING_PATTERN = longArrayOf(0, 400)
+        val JUMP_PATTERN = longArrayOf(0, 120, 100, 120, 100, 120)
+        val REDO_PATTERN = longArrayOf(0, 250, 150, 250)
     }
 }

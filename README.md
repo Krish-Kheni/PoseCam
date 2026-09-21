@@ -6,6 +6,7 @@ and IMU data, for robotics data collection. Local capture only.
 - Plan: [docs/PLAN.md](docs/PLAN.md)
 - Coordinate conventions: [docs/COORDINATES.md](docs/COORDINATES.md)
 - Setting up a new phone (install, checks): [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md)
+- One-page handout for collectors: [docs/RECORDING_TIPS.md](docs/RECORDING_TIPS.md)
 
 ## Build and install
 
@@ -26,7 +27,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## Get the data
 
-On the phone, **Recordings** lists sessions and can share a zip, save it to
+On the phone, **Recordings** lists sessions and can export the pipeline format (MP4 +
+pose file, same rules as `export_anysense.py`), share a zip, save it to
 `Downloads/PoseCam/`, or delete it (see [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md)).
 With adb:
 
