@@ -138,8 +138,8 @@ dependencies automatically.
 
 ## 5. One-time checks for a new phone model
 
-Record each of these, pull, and run the tool. Send the output to the team, and add
-the results to the "Device notes" in CLAUDE.md.
+Record each of these, pull, and run the tool. Send the output to the team, and keep
+it with the notes for that phone model.
 
 | Check | Recording | Command | Pass |
 |---|---|---|---|

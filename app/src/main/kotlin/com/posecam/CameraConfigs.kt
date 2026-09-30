@@ -12,7 +12,7 @@ import kotlin.math.abs
  */
 object CameraConfigs {
     /**
-     * The team's locked CPU image size (see CLAUDE.md). 640x480 holds 30 fps on an
+     * The team's locked CPU image size. 640x480 holds 30 fps on an
      * S20 FE where 1280x720 drops frames. The in-app button can still change it for
      * testing, but recordings at other sizes are not comparable.
      */

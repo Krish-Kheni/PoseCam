@@ -32,3 +32,7 @@ dist/
 # Signing: the keystore lives outside the repo; this file holds its passwords
 keystore.properties
 keys/
+
+# Local notes and private data, never published
+CLAUDE.md
+recorded-videos-colleague/
