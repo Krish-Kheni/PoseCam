@@ -9,9 +9,76 @@
         android:id="@+id/header"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:ellipsize="end"
         android:fontFamily="monospace"
+        android:maxLines="1"
         android:paddingBottom="12dp"
         android:textSize="13sp" />
+
+    <!-- Cloud upload banner (hidden unless a backend URL is configured). Settings: gear in the header. -->
+    <LinearLayout
+        android:id="@+id/cloudBanner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"
+        android:layout_marginTop="12dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingBottom="8dp"
+        android:paddingEnd="8dp"
+        android:paddingStart="14dp"
+        android:paddingTop="8dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/cloudBannerIcon"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:contentDescription="@null" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/cloudBannerText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="#212121"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/cloudBannerDetail"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="#616161"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
+            <ProgressBar
+                android:id="@+id/cloudBannerProgress"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:max="100"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/cloudBannerAction"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:textAllCaps="true"
+            android:textStyle="bold"
+            android:visibility="gone" />
+    </LinearLayout>
 
     <ListView
         android:id="@+id/list"

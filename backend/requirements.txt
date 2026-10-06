@@ -1,0 +1,6 @@
+fastapi>=0.115,<1.0
+mangum>=0.19,<1.0
+pydantic>=2.8,<3.0
+# boto3 is preinstalled in the Lambda runtime, but we pin it so presigning
+# (ChecksumSHA256 hoisting behaviour) is reproducible.
+boto3>=1.36,<2.0

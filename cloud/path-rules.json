@@ -1,0 +1,71 @@
+{
+  "_comment": "Single source of truth for what the PoseCam app may upload. Checked against BOTH the Kotlin CloudFileRules (app/src/test .../CloudFileRulesTest) and the backend PoseCam profile (backend/app/services/paths.py, see cloud/check_backend_rules.py). If these disagree, a path the backend rejects fails permanently on the phone.",
+  "sessionIds": {
+    "valid": [
+      "capture-20260916T143052-a3f9c1",
+      "capture-20991231T235959-000000",
+      "capture-20260101T000000-ffffff"
+    ],
+    "invalid": [
+      "",
+      "capture-20260916T143052-A3F9C1",
+      "capture-20260916T143052-a3f9c",
+      "capture-20260916T143052-a3f9c1x",
+      "capture-2026091T143052-a3f9c1",
+      "capture-20260916T14305-a3f9c1",
+      "capture-20260916T143052-a3f9c1\n",
+      "../capture-20260916T143052-a3f9c1",
+      "capture-20260916T143052-a3f9c1/",
+      "123e4567-e89b-42d3-a456-426614174000",
+      "my-notes"
+    ]
+  },
+  "paths": {
+    "allowed": [
+      {"path": "manifest.json", "type": "METADATA", "required": true, "subdir": "metadata", "sizeClass": "small"},
+      {"path": "device.json", "type": "METADATA", "required": true, "subdir": "metadata", "sizeClass": "small"},
+      {"path": "intrinsics.json", "type": "METADATA", "required": true, "subdir": "metadata", "sizeClass": "small"},
+      {"path": "poses.csv", "type": "TABLE", "required": true, "subdir": "tables", "sizeClass": "small"},
+      {"path": "frame_metadata.csv", "type": "TABLE", "required": true, "subdir": "tables", "sizeClass": "small"},
+      {"path": "imu.csv", "type": "IMU", "required": true, "subdir": "imu", "sizeClass": "large"},
+      {"path": "frames-00000.zip", "type": "FRAME_CHUNK", "required": true, "subdir": "frames", "sizeClass": "small"},
+      {"path": "frames-00042.zip", "type": "FRAME_CHUNK", "required": true, "subdir": "frames", "sizeClass": "small"},
+      {"path": "frames-123456.zip", "type": "FRAME_CHUNK", "required": true, "subdir": "frames", "sizeClass": "small"},
+      {"path": "export/2026-09-16-14_30_52-a3f9c1-s1/RGB_2026-09-16-14_30_52-a3f9c1-s1.mp4", "type": "EXPORT", "required": false, "subdir": "export/2026-09-16-14_30_52-a3f9c1-s1", "sizeClass": "large"},
+      {"path": "export/2026-09-16-14_30_52-a3f9c1-s1/AR_Pose_2026-09-16-14_30_52-a3f9c1-s1.txt", "type": "EXPORT", "required": false, "subdir": "export/2026-09-16-14_30_52-a3f9c1-s1", "sizeClass": "small"},
+      {"path": "export/2026-09-16-14_30_52-a3f9c1-s12/posecam_export.json", "type": "EXPORT", "required": false, "subdir": "export/2026-09-16-14_30_52-a3f9c1-s12", "sizeClass": "small"}
+    ],
+    "rejected": [
+      "",
+      "frames-0000.zip",
+      "frames-1234567.zip",
+      "frames-00000.zip.tmp",
+      "frames-00000.ZIP",
+      "frames/000000_1.jpg",
+      "poses.csv.bak",
+      "Poses.csv",
+      "poses.csv.tmp",
+      "notes.txt",
+      "scratch.tmp",
+      "trajectory.png",
+      "overlay.gif",
+      "imu.csv/../manifest.json",
+      "segment-00001.rjmj",
+      "phone-imu.csv",
+      "preview.mp4",
+      "summary.json",
+      "export/2026-09-16-14_30_52-a3f9c1-s1/RGB_other-stem.mp4",
+      "export/2026-09-16-14_30_52-a3f9c1-s1/notes.txt",
+      "export/2026-09-16-14_30_52-a3f9c1-s1/../manifest.json",
+      "export/2026-09-16-14_30_52-A3F9C1-s1/RGB_2026-09-16-14_30_52-A3F9C1-s1.mp4",
+      "export/2026-09-16-14_30_52-a3f9c1-s1/RGB_2026-09-16-14_30_52-a3f9c1-s1.mp4/extra",
+      "export/RGB_x.mp4",
+      "/manifest.json",
+      "../manifest.json",
+      "s3:manifest.json",
+      "manifest.json%00",
+      "manifest.json\n",
+      "C:\\manifest.json"
+    ]
+  }
+}

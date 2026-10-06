@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+.aws-sam/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+# Deployment config is per-developer / per-account; never commit it.
+samconfig.toml
+samconfig.yaml
+.env
+.env.*
+
+# Keep the template, ignore real secrets (the repo root ignores .env.* too).
+.env
+!.env.example
+
+# Local-development catalog (CATALOG_BACKEND=local)
+local-catalog.db*

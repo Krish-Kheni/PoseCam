@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Debug builds may talk to a local http:// dev backend (see docs/CLOUD_UPLOAD.md). Release builds
+         keep the platform default: cleartext HTTP is blocked, and CloudConfig only accepts https there. -->
+    <application android:usesCleartextTraffic="true">
+        <!-- Debug-only entry for devices without ARCore: a second launcher icon, "PoseCam Dev". -->
+        <activity
+            android:name=".DevMenuActivity"
+            android:exported="true"
+            android:label="PoseCam Dev"
+            android:theme="@android:style/Theme.Material.Light">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

@@ -10,11 +10,16 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import android.view.Menu
+import android.view.MenuItem
+import android.view.View
+import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.ListView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.FileProvider
+import com.posecam.core.sync.CloudSync
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
@@ -37,30 +42,110 @@ class SessionsActivity : Activity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var rows: List<Row> = emptyList()
 
+    /** Null unless cloud upload is configured (a backend URL was built in): then this screen is exactly as before. */
+    private var cloud: SessionsCloudUi? = null
+    private var listAdapter: ArrayAdapter<String>? = null
+    private var baseHeader = ""
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_sessions)
         captures = File(getExternalFilesDir(null), "captures")
+        keepBelowSystemBars()
         findViewById<ListView>(R.id.list).setOnItemClickListener { _, _, position, _ -> showActions(rows[position]) }
+        cloud = runCatching { CloudSync.get(this).takeIf { it.config.enabled } }.getOrNull()
+            ?.let { SessionsCloudUi(this, it, ::updateCloudLabels) }
+        cloud?.requestNotificationPermissionOnce()
+    }
+
+    /**
+     * Targeting a recent SDK draws content edge to edge, so without this the list header sits under the action bar
+     * and the status bar. Pad the layout by exactly what covers it (the inset already includes the action bar), keeping its own 16dp padding on top of that.
+     */
+    @Suppress("DEPRECATION")
+    private fun keepBelowSystemBars() {
+        val root = (findViewById<ViewGroup>(android.R.id.content)).getChildAt(0)
+        val base = (16 * resources.displayMetrics.density).toInt()
+        root.setOnApplyWindowInsetsListener { view, insets ->
+            view.setPadding(
+                base + insets.systemWindowInsetLeft,
+                base + insets.systemWindowInsetTop,
+                base + insets.systemWindowInsetRight,
+                base + insets.systemWindowInsetBottom,
+            )
+            insets
+        }
+        root.requestApplyInsets()
+    }
+
+    /** The gear in the header exists only when cloud upload is configured. */
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        if (cloud != null) menuInflater.inflate(R.menu.sessions, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        if (item.itemId == R.id.action_cloud_settings) {
+            cloud?.showSettings()
+            return true
+        }
+        return super.onOptionsItemSelected(item)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        cloud?.start()
+    }
+
+    override fun onStop() {
+        cloud?.stop()
+        super.onStop()
     }
 
     override fun onResume() {
         super.onResume()
+        // Recordings already safe in the cloud can be removed when the phone is short on space.
+        cloud?.reclaimStorage()
         refresh()
     }
 
     private fun refresh() {
         val dirs = captures.listFiles { f -> f.isDirectory }?.sortedByDescending { it.name } ?: emptyList()
         rows = dirs.map { Row(it, describe(it)) }
-        findViewById<ListView>(R.id.list).adapter =
-            ArrayAdapter(this, android.R.layout.simple_list_item_1, rows.map { it.label })
+        val adapter = RowAdapter(rows.map { labelOf(it) })
+        listAdapter = adapter
+        findViewById<ListView>(R.id.list).adapter = adapter
         val free = captures.parentFile?.let { it.usableSpace / 1e9 } ?: 0.0
-        findViewById<TextView>(R.id.header).text =
-            "%d recording(s), %.1f GB used, %.1f GB free\nTap a recording for actions.".format(
-                rows.size, rows.sumOf { SessionZipper.sizeOf(it.dir) } / 1e9, free)
+        baseHeader = "%d recordings · %.1f GB used · %.1f GB free".format(
+            rows.size, rows.sumOf { SessionZipper.sizeOf(it.dir) } / 1e9, free)
+        findViewById<TextView>(R.id.header).text = baseHeader
         findViewById<TextView>(R.id.empty).apply {
             text = getString(R.string.no_recordings, captures.path)
             visibility = if (rows.isEmpty()) TextView.VISIBLE else TextView.GONE
+        }
+    }
+
+    /** A row's label: what it always was, plus a cloud status line when cloud upload is on. */
+    private fun labelOf(row: Row): String = cloud?.let { row.label + "\n" + it.rowLine(row.dir.name) } ?: row.label
+
+
+    /** Cloud state changed: redraw only the second lines, keeping the list's scroll position. */
+    private fun updateCloudLabels() {
+        val adapter = listAdapter ?: return
+        adapter.clear()
+        adapter.addAll(rows.map { labelOf(it) })
+        adapter.notifyDataSetChanged()
+        findViewById<TextView>(R.id.header).text = baseHeader
+    }
+
+    /** The plain text row, plus a cloud status icon at its right end when cloud upload is on (none otherwise). */
+    private inner class RowAdapter(labels: List<String>) : ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, labels) {
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val view = super.getView(position, convertView, parent) as TextView
+            val icon = rows.getOrNull(position)?.let { cloud?.rowIcon(it.dir.name) } ?: 0
+            view.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, icon, 0)
+            view.compoundDrawablePadding = (12 * resources.displayMetrics.density).toInt()
+            return view
         }
     }
 
@@ -86,10 +171,17 @@ class SessionsActivity : Activity() {
         val actions = mutableListOf(getString(R.string.export_pipeline), getString(R.string.share))
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) actions.add(getString(R.string.save_to_downloads))
         actions.add(getString(R.string.delete))
+        // Cloud entries come first and only exist when cloud upload is on; the original entries are untouched.
+        val cloudItems = cloud?.actionsFor(row.dir.name).orEmpty()
+        val labels = cloudItems.map { it.label } + actions
         AlertDialog.Builder(this)
             .setTitle(row.dir.name)
-            .setItems(actions.toTypedArray()) { _, which ->
-                when (actions[which]) {
+            .setItems(labels.toTypedArray()) { _, which ->
+                if (which < cloudItems.size) {
+                    cloudItems[which].run()
+                    return@setItems
+                }
+                when (actions[which - cloudItems.size]) {
                     getString(R.string.export_pipeline) -> askRotationThenExport(row.dir)
                     getString(R.string.share) -> shareZip(row.dir, "${row.dir.name}.zip")
                     getString(R.string.save_to_downloads) -> saveZipToDownloads(row.dir, "${row.dir.name}.zip")
@@ -239,9 +331,10 @@ class SessionsActivity : Activity() {
     private fun confirmDelete(dir: File) {
         AlertDialog.Builder(this)
             .setTitle("Delete ${dir.name}?")
-            .setMessage("This cannot be undone. Make sure it has been shared or saved first.")
+            .setMessage(cloud?.deleteWarning(dir.name) ?: "This cannot be undone. Make sure it has been shared or saved first.")
             .setPositiveButton(R.string.delete) { _, _ ->
                 dir.deleteRecursively()
+                cloud?.onDeleted(dir.name)
                 refresh()
             }
             .setNegativeButton(android.R.string.cancel, null)

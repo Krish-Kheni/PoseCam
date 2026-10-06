@@ -34,6 +34,9 @@ import com.google.ar.core.exceptions.UnavailableDeviceNotCompatibleException
 import com.google.ar.core.exceptions.UnavailableException
 import com.google.ar.core.exceptions.UnavailableSdkTooOldException
 import com.google.ar.core.exceptions.UnavailableUserDeclinedInstallationException
+import com.posecam.core.sync.CloudSync
+import com.posecam.core.sync.CloudUiText
+import com.posecam.core.sync.Pipe
 import java.io.File
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
@@ -112,9 +115,14 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
                 "jpeg_quality" to JPEG_QUALITY,
                 "orientation" to "sensor native, not rotated for display",
             ),
+            // Null when cloud upload is not configured, which makes it a no-op. A cloud problem must never
+            // stop a recording from starting, hence runCatching.
+            listener = runCatching { CloudSync.get(this).sessionListener }.getOrNull(),
         )
         imageGrabber = ImageGrabber(recorder.pool)
         imuSource = ImuSource(this, imuRecorder)
+        // Rebuild/resume the upload queue (also adopts recordings made before cloud upload existed). No-op when off.
+        runCatching { CloudSync.get(this).recoverQueue() }
 
         surfaceView.preserveEGLContextOnPause = true
         surfaceView.setEGLContextClientVersion(2)
@@ -350,10 +358,14 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         } else {
             val freeGb = freeGb()
             if (freeGb < MIN_FREE_GB) {
+                // With cloud upload on, recordings already safe in the cloud can be reclaimed automatically.
+                val cleaning = runCatching { CloudSync.get(this) }.getOrNull()?.takeIf { it.config.enabled }
+                cleaning?.reclaimStorage()
                 AlertDialog.Builder(this)
                     .setTitle("Not enough space")
                     .setMessage("Only %.1f GB free, about %.0f minutes of recording. Export and delete old recordings first."
-                        .format(freeGb, 60 * freeGb / GB_PER_HOUR))
+                        .format(freeGb, 60 * freeGb / GB_PER_HOUR) +
+                        if (cleaning != null) " Recordings that are already synced to the cloud are being removed to make room: try again in a moment." else "")
                     .setPositiveButton(R.string.close, null)
                     .show()
                 return
@@ -406,13 +418,30 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             }
             append("\n\nSaved as ")
             append(summary.directory.name)
+            cloudNote(verdict.redo)?.let { append("\n\n").append(it) }
         }
-        AlertDialog.Builder(this)
-            .setTitle(verdict.headline)
-            .setMessage(body)
-            .setPositiveButton(R.string.close, null)
-            .show()
+        TakeResultDialog.show(this, verdict.headline, body, verdict.redo, cloudEnabled()) { pipe -> onPipeChosen(summary, pipe) }
     }
+
+    private fun cloudEnabled(): Boolean = runCatching { CloudSync.get(this).config.enabled }.getOrDefault(false)
+
+    /** The collector chose a pipe: upload of this take starts (it is paused while recording, resumed by Stop). */
+    private fun onPipeChosen(summary: PoseRecorder.Summary, pipe: Pipe) {
+        val message = runCatching {
+            val sync = CloudSync.get(this)
+            sync.coordinator.choosePipe(summary.directory.name, pipe)
+            val policy = sync.settings.policy
+            CloudUiText.pipeChosenMessage(pipe, policy, sync.networkStatus.satisfies(policy))
+        }.getOrNull() ?: return
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+    }
+
+    /** One line for the end-of-take dialog when cloud upload is on; null (nothing added) when it is off. */
+    private fun cloudNote(redo: Boolean): String? = runCatching {
+        if (!CloudSync.get(this).config.enabled) return@runCatching null
+        if (redo) "Not uploaded. You can still file it under a pipe later, in Recordings."
+        else "Choose a pipe to file this take under: it uploads once you do."
+    }.getOrNull()
 
     private var handlingWriteFailure = false
 

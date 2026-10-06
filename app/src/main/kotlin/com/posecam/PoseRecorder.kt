@@ -20,6 +20,8 @@ class PoseRecorder(
     private val encoder: FrameEncoder,
     private val imageMetadata: Map<String, Any?> = emptyMap(),
     poolSize: Int = 8,
+    /** Told when a session starts and when it is finalized; null (the default) is a complete no-op. */
+    private val listener: SessionFileListener? = null,
 ) {
     data class Summary(
         val directory: File, val frameCount: Long, val imagesSaved: Long, val imagesDropped: Long, val poseJumps: Int,
@@ -109,6 +111,18 @@ class PoseRecorder(
         device: Map<String, Any?> = emptyMap(),
         recordPressedElapsedRealtimeNs: Long? = null,
         wallTimeMs: Long = System.currentTimeMillis(),
+    ): File {
+        val started = startLocked(metadata, device, recordPressedElapsedRealtimeNs, wallTimeMs)
+        // After the lock is released and the initial manifest (complete:false) is on disk.
+        notifyListener { it.onSessionStarted(started.name, started) }
+        return started
+    }
+
+    private fun startLocked(
+        metadata: Map<String, Any?>,
+        device: Map<String, Any?>,
+        recordPressedElapsedRealtimeNs: Long?,
+        wallTimeMs: Long,
     ): File = synchronized(lock) {
         check(writer == null) { "Already recording" }
         sessionId = newSessionId(wallTimeMs)
@@ -224,28 +238,51 @@ class PoseRecorder(
      * [extra] is merged into manifest.json (e.g. IMU stats).
      */
     fun stop(extra: Map<String, Any?> = emptyMap(), wallTimeMs: Long = System.currentTimeMillis()): Summary? {
+        var finishedDirectory: File? = null
         val frames = synchronized(lock) {
             val out = writer ?: return null
+            finishedDirectory = directory
             runCatching { out.close() }   // a failed close must not lose the rest of the session
             writer = null
             metadataWriter?.close()
             metadataWriter = null
             frameWriter.also { frameWriter = null }!!
         }
-        // Outside the lock: the GL thread must not wait on JPEG encoding.
-        val stats = frames.finish()
-        return synchronized(lock) {
-            writerStats = stats
-            extraMetadata = extra
-            writeIntrinsics(complete = true)
-            writeManifest(isoUtc(wallTimeMs))
-            Summary(
-                directory!!, frameCount, stats.written,
-                droppedByReason.values.sum() + stats.failedFrameIndices.size, jumpDetector.count,
-                trackedCount, recordedDurationNs / 1e9,
-                // an unfinished gap still counts: the take ended while tracking was lost
-                maxOf(longestGapNs, gapStartNs?.let { (lastTimestampNs ?: it) - it } ?: 0L) / 1e9,
-            )
+        // Whatever happens below, the session is over: the listener must hear about it, or whatever it
+        // gates on "a take is in progress" would stay blocked. complete:true is only claimed once the final
+        // manifest was really written.
+        var manifestComplete = false
+        try {
+            // Outside the lock: the GL thread must not wait on JPEG encoding.
+            val stats = frames.finish()
+            return synchronized(lock) {
+                writerStats = stats
+                extraMetadata = extra
+                writeIntrinsics(complete = true)
+                writeManifest(isoUtc(wallTimeMs))
+                manifestComplete = true
+                Summary(
+                    directory!!, frameCount, stats.written,
+                    droppedByReason.values.sum() + stats.failedFrameIndices.size, jumpDetector.count,
+                    trackedCount, recordedDurationNs / 1e9,
+                    // an unfinished gap still counts: the take ended while tracking was lost
+                    maxOf(longestGapNs, gapStartNs?.let { (lastTimestampNs ?: it) - it } ?: 0L) / 1e9,
+                )
+            }
+        } finally {
+            finishedDirectory?.let { dir ->
+                val status = if (manifestComplete) STATUS_COMPLETE else STATUS_INCOMPLETE
+                notifyListener { it.onSessionFinalized(dir.name, dir, status) }
+            }
+        }
+    }
+
+    /** A cloud problem must never interrupt a recording: whatever the listener throws is swallowed. */
+    private fun notifyListener(call: (SessionFileListener) -> Unit) {
+        val target = listener ?: return
+        try {
+            call(target)
+        } catch (ignored: Throwable) {
         }
     }
 
@@ -305,6 +342,10 @@ class PoseRecorder(
 
     companion object {
         const val FORMAT_VERSION = "posecam-5"
+
+        /** What [SessionFileListener.onSessionFinalized] reports; mirrors manifest.json's `"complete"`. */
+        const val STATUS_COMPLETE = "complete"
+        const val STATUS_INCOMPLETE = "incomplete"
         private const val INTRINSICS_EVERY_FRAMES = 30
         private const val FLUSH_EVERY_ROWS = 100
         private val random = SecureRandom()

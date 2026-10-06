@@ -1,0 +1,165 @@
+package com.posecam.core.sync
+
+import android.content.Context
+import com.posecam.BuildConfig
+import com.posecam.core.cloud.AuthProvider
+import com.posecam.core.cloud.CloudApi
+import com.posecam.core.cloud.CloudApiClient
+import com.posecam.core.cloud.CloudConfig
+import com.posecam.core.cloud.InstallationId
+import com.posecam.core.cloud.NoAuthProvider
+import com.posecam.CaptureActivity
+import com.posecam.SessionFileListener
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import java.io.File
+
+/**
+ * Process-wide wiring for cloud sync -- a small hand-rolled service locator, deliberately not a
+ * DI framework. Everything is created lazily and off the recording path: when the backend URL is
+ * not configured, [sessionListener] is null, the database is never opened and recording is
+ * byte-for-byte what it was before cloud upload existed.
+ *
+ * Swapping authentication later means passing a different [AuthProvider] here; nothing else changes.
+ */
+class CloudSync private constructor(context: Context) {
+    private val appContext = context.applicationContext
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    val config: CloudConfig = CloudConfig.fromBuildConfig()
+    val settings: CloudSyncSettings by lazy { CloudSyncSettings(appContext) }
+    val networkStatus: NetworkStatus by lazy { NetworkStatus(appContext) }
+
+    /** Replace with a real provider (e.g. DeviceAuthProvider) once device authentication exists. */
+    private val authProvider: AuthProvider = NoAuthProvider()
+    private val installationId: String by lazy { InstallationId(appContext).get() }
+
+    val notifier: CloudNotifier by lazy { CloudNotifier(appContext) }
+    val announcer: SyncAnnouncer by lazy { SyncAnnouncer(PrefsAnnouncementStore(appContext)) }
+
+    /** `getExternalFilesDir(null)`: where PoseCam keeps `captures/` (and, beside it, `upload-staging/`). */
+    private val appRoot: File by lazy { appContext.getExternalFilesDir(null) ?: appContext.filesDir }
+
+    /** The recordings folder: one `capture-...` directory per take. Same path CaptureActivity records into. */
+    val capturesRoot: File by lazy { File(appRoot, "captures") }
+
+    private val staging: UploadStaging by lazy { UploadStaging(File(appRoot, "upload-staging")) }
+
+    private val database: UploadDatabase by lazy { UploadDatabase.get(appContext) }
+    val repository: UploadRepository by lazy {
+        UploadRepository(database.uploadDao(), Transactor.forDatabase(database), onSessionForgotten = staging::purgeSession)
+    }
+    private val scheduler: UploadScheduler by lazy { WorkManagerUploadScheduler(appContext, settings) }
+    val coordinator: UploadCoordinator by lazy { UploadCoordinator(repository, scheduler, staging) }
+
+    private val api: CloudApi by lazy { CloudApiClient(config, authProvider, installationId) }
+    val processor: UploadProcessor by lazy {
+        UploadProcessor(
+            repository = repository,
+            api = api,
+            transport = OkHttpS3Transport(config),
+            hasher = FileHasher(UploadThreads.dispatcher),
+            installationId = { installationId },
+            appVersion = BuildConfig.VERSION_NAME,
+            materializer = FrameChunkMaterializer(repository, UploadThreads.dispatcher),
+        )
+    }
+
+    val retention: LocalRetentionManager by lazy {
+        LocalRetentionManager(
+            repository = repository,
+            enabled = { settings.autoCleanupEnabled },
+            retentionDays = { settings.retentionDays },
+            storagePressure = { storagePressure(appRoot) },
+        )
+    }
+
+    /** What recording hands to [com.posecam.PoseRecorder]; null when sync is off. */
+    val sessionListener: SessionFileListener? get() = if (config.enabled) coordinator else null
+
+    /** Per-session cloud progress for the UI; empty when sync is off. */
+    fun observeSummaries(): Flow<Map<String, SessionCloudSummary>> =
+        if (config.enabled) repository.observeSummaries() else emptyFlow()
+
+    private val _settings by lazy { MutableStateFlow(settings.snapshot()) }
+
+    /** Live settings for the Settings screen. */
+    val settingsFlow: StateFlow<CloudSettingsSnapshot> get() = _settings.asStateFlow()
+
+    fun setPolicy(policy: SyncPolicy) {
+        settings.policy = policy
+        _settings.value = settings.snapshot()
+        // Replace waiting work so it picks up the new network constraint immediately.
+        if (config.enabled) coordinator.onNetworkPolicyChanged()
+    }
+
+    fun setRetentionDays(days: Int) {
+        settings.retentionDays = days
+        _settings.value = settings.snapshot()
+    }
+
+    fun setConfirmMobileData(enabled: Boolean) {
+        settings.confirmMobileData = enabled
+        _settings.value = settings.snapshot()
+    }
+
+    /** True on mobile data or any other metered network; used to confirm before a manual upload. */
+    fun isMetered(): Boolean = !networkStatus.isUnmetered()
+
+    fun setAutoCleanupEnabled(enabled: Boolean) {
+        settings.autoCleanupEnabled = enabled
+        _settings.value = settings.snapshot()
+    }
+
+    /**
+     * True while the current network would not let queued uploads start under the active policy.
+     * Live: re-evaluated on every connectivity change and every policy change.
+     */
+    fun waitingForNetwork(): Flow<Boolean> =
+        if (!config.enabled) {
+            flowOf(false)
+        } else {
+            combine(_settings, networkStatus.changes()) { snapshot, _ -> !networkStatus.satisfies(snapshot.policy) }
+                .distinctUntilChanged()
+        }
+
+    /** App start: rebuild/resume the queue off the main thread. Adopts recordings made before cloud upload existed. */
+    fun recoverQueue() {
+        if (!config.enabled) return
+        scope.launch {
+            runCatching { UploadQueueRecovery(capturesRoot, repository, scheduler, staging).run() }
+            runCatching { retention.cleanup() }
+        }
+    }
+
+    /** Recording is running low on space: reclaim what is already safely in the cloud. */
+    fun reclaimStorage() {
+        if (!config.enabled) return
+        scope.launch { runCatching { retention.cleanup() } }
+    }
+
+    /**
+     * PoseCam refuses to record below [CaptureActivity.MIN_FREE_GB], so cleanup of already-synced
+     * recordings starts 2 GB earlier (6 GB), while there is still room to work in.
+     */
+    private fun storagePressure(root: File): Boolean = root.usableSpace < (CaptureActivity.MIN_FREE_GB + 2.0) * 1e9
+
+    companion object {
+        @Volatile
+        private var instance: CloudSync? = null
+
+        fun get(context: Context): CloudSync = instance ?: synchronized(this) {
+            instance ?: CloudSync(context).also { instance = it }
+        }
+    }
+}
