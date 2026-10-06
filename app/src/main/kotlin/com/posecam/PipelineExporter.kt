@@ -16,7 +16,16 @@ import java.io.File
 object PipelineExporter {
     private const val TAG = "PoseCam"
 
-    class ExportException(message: String) : Exception(message)
+    /** Why a recording has no export. Only the cloud upload tells these apart; the Recordings screen shows [message]. */
+    enum class Reason {
+        /** The recording was made with settings the dataset does not take (size, fps, focus). */
+        OFF_PROTOCOL,
+
+        /** Anything else that is a property of the recording, so trying again changes nothing. */
+        UNEXPORTABLE,
+    }
+
+    class ExportException(message: String, val reason: Reason = Reason.UNEXPORTABLE) : Exception(message)
 
     class Result(val folders: List<File>, val frames: Int, val skipped: Int, val bytes: Long)
 
@@ -58,7 +67,7 @@ object PipelineExporter {
         val problems = offProtocol(manifest)
         if (problems.isNotEmpty()) {
             throw ExportException("This recording was ${problems.joinToString("; ")}. " +
-                "It cannot be mixed with the rest of the dataset, so it is not exported.")
+                "It cannot be mixed with the rest of the dataset, so it is not exported.", Reason.OFF_PROTOCOL)
         }
         val startWallMs = SessionExport.parseWallTime(manifest.getString("start_wall_time_utc"))
         // posecam-3 and earlier have no Record-tap stamp; the first frame predates it by ~100 ms.

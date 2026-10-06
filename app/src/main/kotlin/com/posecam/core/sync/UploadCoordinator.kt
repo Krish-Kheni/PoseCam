@@ -94,6 +94,11 @@ class UploadCoordinator(
         }
     }
 
+    /** The export rotation was set: recordings whose export was waiting for it are picked up by the next pass. */
+    fun onExportSettingsChanged() {
+        scope.launch { scheduler.schedule() }
+    }
+
     fun onNetworkPolicyChanged() {
         scope.launch { scheduler.reschedule() }
     }

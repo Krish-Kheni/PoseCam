@@ -39,7 +39,13 @@ class UploadRepository(
     }
 
     /** Queues one closed file of [sessionId]. Calling it again for the same file is a no-op. */
-    suspend fun enqueue(sessionId: String, directory: File, file: QueuedFile): EnqueueResult = transactor.run {
+    suspend fun enqueue(
+        sessionId: String,
+        directory: File,
+        file: QueuedFile,
+        /** Queue position (rows run oldest first); null means now, i.e. behind everything queued already. */
+        createdAt: Long? = null,
+    ): EnqueueResult = transactor.run {
         // A file the backend would reject permanently must never enter the queue.
         require(CloudFileRules.isUploadable(file.relativePath)) { "Not an uploadable session file: ${file.relativePath}" }
         val now = clock()
@@ -54,7 +60,7 @@ class UploadRepository(
             required = CloudFileRules.isRequired(file.relativePath),
             sizeBytes = file.sizeBytes,
             sha256 = file.sha256,
-            createdAt = now,
+            createdAt = createdAt ?: now,
             updatedAt = now,
         )
         if (dao.insertUploadIgnore(row) != NOT_INSERTED) {
@@ -118,6 +124,48 @@ class UploadRepository(
         dao.updateSession(session.copy(pipe = pipe.wire, updatedAt = clock()))
         CloudLog.i("pipe_chosen", "session" to sessionId, "pipe" to pipe.wire)
         true
+    }
+
+    // ---- pipeline export -------------------------------------------------------------------
+
+    suspend fun sessionsNeedingExport(): List<CloudSessionEntity> = dao.sessionsNeedingExport()
+
+    /**
+     * The export of [sessionId] was written to staging: queue its files and remember it is done, in one transaction, so a
+     * crash can never leave "done" without rows (which would lose the export) or rows without "done" (which would redo it).
+     * The files go to the FRONT of the queue: they are about 50 MB against gigabytes of raw data, and they are what
+     * LabelNow uses, so a labeler's recording becomes labelable long before the raw upload ends.
+     */
+    suspend fun completeExport(sessionId: String, files: List<QueuedFile>) {
+        transactor.run {
+            val session = dao.getSession(sessionId) ?: return@run
+            val front = (dao.minRunnableCreatedAt() ?: clock()) - files.size - 1
+            files.forEachIndexed { index, file ->
+                enqueue(sessionId, File(session.directoryPath), file, createdAt = front + index)
+            }
+            dao.updateSession(session.copy(exportState = ExportState.DONE, exportNote = null, updatedAt = clock()))
+            CloudLog.i("export_queued", "session" to sessionId, "files" to files.size)
+        }
+    }
+
+    /** The export is not coming ([state] is one of the lasting or failed outcomes); [note] says why, in plain words. */
+    suspend fun markExportMissing(sessionId: String, state: ExportState, note: String) {
+        require(state != ExportState.PENDING && state != ExportState.DONE)
+        mutateSession(sessionId) { it.copy(exportState = state, exportNote = note.take(MAX_ERROR_CHARS)) }
+        CloudLog.w("export_missing", "session" to sessionId, "state" to state.name, "note" to note)
+    }
+
+    /**
+     * Makes the export again: a crashed one (user retry), or one whose staged files vanished before they were uploaded.
+     * Rows of an earlier export are dropped; files already verified in the cloud are simply sent again if the new bytes differ.
+     */
+    suspend fun resetExport(sessionId: String) {
+        transactor.run {
+            val exportRows = dao.uploadsForSession(sessionId).filter { it.kind == UploadSourceKind.EXPORT }
+            exportRows.forEach { dao.deleteUpload(it.id) }
+            val session = dao.getSession(sessionId) ?: return@run
+            dao.updateSession(session.copy(exportState = ExportState.PENDING, exportNote = null, updatedAt = clock()))
+        }
     }
 
     /** Startup: a worker killed mid-prepare left PREPARING rows; they are plainly runnable again. */
@@ -248,6 +296,10 @@ class UploadRepository(
         dao.allSessions()
             .filter { it.permanentFailure && (sessionId == null || it.sessionId == sessionId) }
             .forEach { dao.updateSession(it.copy(permanentFailure = false, lastError = null, updatedAt = clock())) }
+        // So does an export that crashed (storage, encoder): only an explicit retry runs it again.
+        dao.allSessions()
+            .filter { it.exportState == ExportState.FAILED && (sessionId == null || it.sessionId == sessionId) }
+            .forEach { dao.updateSession(it.copy(exportState = ExportState.PENDING, exportNote = null, updatedAt = clock())) }
         failed.size
     }
 
@@ -280,11 +332,12 @@ class UploadRepository(
 
     /** Live per-session cloud progress for the UI. */
     fun observeSummaries(): Flow<Map<String, SessionCloudSummary>> =
-        combine(dao.observeAggregates(), dao.observeSessions()) { aggregates, sessions ->
+        combine(dao.observeAggregates(), dao.observeSessions(), dao.observeExportAggregates()) { aggregates, sessions, exports ->
             val bySession = sessions.associateBy { it.sessionId }
             val byAggregate = aggregates.associateBy { it.sessionId }
+            val byExport = exports.associateBy { it.sessionId }
             (bySession.keys + byAggregate.keys).associateWith { id ->
-                SessionCloudSummary.from(byAggregate[id], bySession[id])
+                SessionCloudSummary.from(byAggregate[id], bySession[id], byExport[id])
             }
         }.distinctUntilChanged()
 

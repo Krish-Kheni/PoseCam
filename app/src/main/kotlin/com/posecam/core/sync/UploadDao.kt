@@ -60,6 +60,9 @@ interface UploadDao {
     @Query("UPDATE uploads SET state = 'PENDING', updatedAt = :now WHERE state = 'PREPARING'")
     suspend fun resetPreparing(now: Long): Int
 
+    @Query("DELETE FROM uploads WHERE id = :id")
+    suspend fun deleteUpload(id: Long)
+
     @Query("DELETE FROM uploads WHERE sessionId = :sessionId")
     suspend fun deleteUploadsForSession(sessionId: String)
 
@@ -80,6 +83,19 @@ interface UploadDao {
         """,
     )
     fun observeAggregates(): Flow<List<SessionUploadAggregate>>
+
+    @Query(
+        """
+        SELECT sessionId,
+               COUNT(*) AS files,
+               SUM(CASE WHEN state = 'VERIFIED' THEN 1 ELSE 0 END) AS verifiedFiles,
+               SUM(CASE WHEN state = 'FAILED' THEN 1 ELSE 0 END) AS failedFiles
+        FROM uploads
+        WHERE required = 0
+        GROUP BY sessionId
+        """,
+    )
+    fun observeExportAggregates(): Flow<List<SessionExportAggregate>>
 
     // ---- cloud sessions --------------------------------------------------------------------
 
@@ -115,6 +131,18 @@ interface UploadDao {
         """,
     )
     suspend fun sessionsReadyToComplete(): List<CloudSessionEntity>
+
+    /**
+     * Finalized, filed recordings whose pipeline export is still to be made. A recording the collector has not filed yet
+     * is left alone (nothing about it is sent or produced), and so is one the backend refused.
+     */
+    @Query(
+        """
+        SELECT * FROM cloud_sessions
+        WHERE exportState = 'PENDING' AND recordingFinal = 1 AND permanentFailure = 0 AND pipe IS NOT NULL
+        """,
+    )
+    suspend fun sessionsNeedingExport(): List<CloudSessionEntity>
 
     @Query("DELETE FROM cloud_sessions WHERE sessionId = :sessionId")
     suspend fun deleteSession(sessionId: String)

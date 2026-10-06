@@ -15,6 +15,14 @@ data class SessionCloudSummary(
     val lastError: String?,
     /** [Pipe.wire] chosen for this recording, or null while it still has to be chosen. */
     val pipe: String? = null,
+    /** Where the pipeline export stands; null when the session is unknown or exporting does not apply. */
+    val exportState: ExportState? = null,
+    /** The exporter's reason when [exportState] says the export is missing. */
+    val exportNote: String? = null,
+    /** Export files queued / failed for good / not yet verified. They never affect [status]. */
+    val exportFiles: Int = 0,
+    val exportFilesFailed: Int = 0,
+    val exportFilesVerified: Int = 0,
 ) {
     /** PENDING work that cannot start because the network policy is not satisfied reads "Waiting for Wi-Fi". */
     fun displayStatus(waitingForNetwork: Boolean): SessionCloudStatus =
@@ -22,8 +30,15 @@ data class SessionCloudSummary(
 
     val isSynced: Boolean get() = status == SessionCloudStatus.SYNCED
 
+    /** What the Recordings screen has to say about the export once the raw upload is done; see [CloudUiText.syncedLine]. */
+    val exportFilesOpen: Int get() = exportFiles - exportFilesVerified
+
     companion object {
-        fun from(aggregate: SessionUploadAggregate?, session: CloudSessionEntity?): SessionCloudSummary {
+        fun from(
+            aggregate: SessionUploadAggregate?,
+            session: CloudSessionEntity?,
+            export: SessionExportAggregate? = null,
+        ): SessionCloudSummary {
             val id = aggregate?.sessionId ?: requireNotNull(session).sessionId
             val total = aggregate?.totalFiles ?: 0
             val verified = aggregate?.verifiedFiles ?: 0
@@ -50,6 +65,11 @@ data class SessionCloudSummary(
                 transferredBytes = aggregate?.transferredBytes ?: 0,
                 lastError = aggregate?.lastError ?: session?.lastError,
                 pipe = session?.pipe,
+                exportState = session?.exportState,
+                exportNote = session?.exportNote,
+                exportFiles = export?.files ?: 0,
+                exportFilesFailed = export?.failedFiles ?: 0,
+                exportFilesVerified = export?.verifiedFiles ?: 0,
             )
         }
     }

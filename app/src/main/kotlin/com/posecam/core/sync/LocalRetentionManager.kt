@@ -14,6 +14,12 @@ enum class RetentionBlock {
     FILES_NOT_VERIFIED,
     LOCAL_FILE_NOT_COVERED,
     FRAMES_NOT_COVERED,
+
+    /** The pipeline export has not been made (or crashed): the raw frames are the only way to make it. */
+    EXPORT_PENDING,
+
+    /** The export is made but not all of it is verified in the cloud: its staged copy is not a substitute for the frames. */
+    EXPORT_NOT_UPLOADED,
 }
 
 /**
@@ -24,6 +30,9 @@ enum class RetentionBlock {
  *    are ever eligible. LOCAL_ONLY, PENDING, UPLOADING and FAILED sessions are never touched.
  *  * Even then they are kept for [retentionDays] (default 7), unless the phone is short on
  *    storage, in which case the oldest synced sessions go first until the pressure is gone.
+ *  * A recording whose pipeline export is still to be made, or still on its way to the cloud, stays: the raw frames
+ *    are what the export is made from, and the export is the part LabelNow actually uses. (An export that cannot
+ *    exist at all, e.g. an off-protocol recording, does not hold anything back.)
  *  * It never runs on the recording path and cannot weaken the existing low-storage guard: it
  *    only ever frees space by removing data that already exists, verified, in the cloud.
  */
@@ -76,7 +85,9 @@ class LocalRetentionManager(
         if (!session.recordingFinal || SessionManifestInfo.read(directory) == null) {
             return RetentionBlock.RECORDING_NOT_FINAL
         }
+        if (session.exportState == ExportState.PENDING || session.exportState == ExportState.FAILED) return RetentionBlock.EXPORT_PENDING
         val rows = repository.uploadsForSession(session.sessionId)
+        if (rows.any { !it.required && it.state != UploadState.VERIFIED }) return RetentionBlock.EXPORT_NOT_UPLOADED
         val required = rows.filter { it.required }
         if (required.isEmpty() || required.any { it.state != UploadState.VERIFIED }) return RetentionBlock.FILES_NOT_VERIFIED
 

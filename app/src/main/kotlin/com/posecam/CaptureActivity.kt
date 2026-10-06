@@ -434,6 +434,8 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             CloudUiText.pipeChosenMessage(pipe, policy, sync.networkStatus.satisfies(policy))
         }.getOrNull() ?: return
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        // Exports are automatic and wait for the rotation: asked here once, never per take.
+        runCatching { ExportRotationDialog.askOnceIfUnset(this, CloudSync.get(this)) }
     }
 
     /** One line for the end-of-take dialog when cloud upload is on; null (nothing added) when it is off. */

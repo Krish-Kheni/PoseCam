@@ -30,13 +30,22 @@ class TakeResultDialogTest {
 
     private fun AlertDialog.label(which: Int) = getButton(which)?.text?.toString()
 
-    @Test fun aGoodTakeWithCloudOnOffersExactlyWhitePipeAndBlackPipe() {
+    @Test fun aGoodTakeWithCloudOnOffersExactlyTheThreePipes() {
         val dialog = shown(redo = false, cloud = true)
 
         assertEquals("White pipe", dialog.label(DialogInterface.BUTTON_POSITIVE))
         assertEquals("Black pipe", dialog.label(DialogInterface.BUTTON_NEGATIVE))
-        assertNull("no third way out", dialog.getButton(DialogInterface.BUTTON_NEUTRAL)?.takeIf { it.visibility == android.view.View.VISIBLE })
+        assertEquals("Black/White pipe", dialog.label(DialogInterface.BUTTON_NEUTRAL))
         assertEquals("Take looks good", shadowOf(dialog).title.toString())
+    }
+
+    @Test fun everyPipeButtonCarriesItsOwnIcon() {
+        val dialog = shown(redo = false, cloud = true)
+
+        fun icon(which: Int) = shadowOf(dialog.getButton(which).compoundDrawablesRelative[0]).createdFromResId
+        assertEquals(R.drawable.ic_pipe_white, icon(DialogInterface.BUTTON_POSITIVE))
+        assertEquals(R.drawable.ic_pipe_black, icon(DialogInterface.BUTTON_NEGATIVE))
+        assertEquals(R.drawable.ic_pipe_black_white, icon(DialogInterface.BUTTON_NEUTRAL))
     }
 
     @Test fun theChoiceCannotBeSkippedWithBackOrATapOutside() {
@@ -72,11 +81,23 @@ class TakeResultDialogTest {
         assertFalse(dialog.isShowing)
     }
 
+    @Test fun blackWhitePipeReportsBlackWhiteAndDismisses() {
+        val chosen = mutableListOf<Pipe>()
+        val dialog = shown(redo = false, cloud = true) { chosen += it }
+
+        dialog.getButton(DialogInterface.BUTTON_NEUTRAL).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals(listOf(Pipe.BLACK_WHITE), chosen)
+        assertFalse(dialog.isShowing)
+    }
+
     @Test fun aTakeToRedoJustHasCloseAndNeverAsksForAPipe() {
         val chosen = mutableListOf<Pipe>()
         val dialog = shown(redo = true, cloud = true) { chosen += it }
 
         assertEquals("Close", dialog.label(DialogInterface.BUTTON_POSITIVE))
+        assertNull(dialog.getButton(DialogInterface.BUTTON_NEUTRAL)?.takeIf { it.visibility == android.view.View.VISIBLE })
         assertTrue(shadowOf(dialog).isCancelable)
         dialog.getButton(DialogInterface.BUTTON_POSITIVE).performClick()
         assertTrue(chosen.isEmpty())

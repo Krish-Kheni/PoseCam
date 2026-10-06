@@ -20,6 +20,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import com.posecam.core.sync.CloudSync
+import com.posecam.core.sync.CloudSyncSettings
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
@@ -32,10 +33,6 @@ import java.util.concurrent.Executors
 class SessionsActivity : Activity() {
 
     private class Row(val dir: File, val label: String)
-
-    private companion object {
-        const val PREF_ROTATION = "export_rotation_degrees"
-    }
 
     private lateinit var captures: File
     private val executor = Executors.newSingleThreadExecutor()
@@ -196,25 +193,13 @@ class SessionsActivity : Activity() {
      * rotation depends on how the phone sits on the mount. Asked once and remembered.
      */
     private fun askRotationThenExport(dir: File) {
+        // The same value Cloud sync settings edits (and the automatic exports use): one place, one answer.
         val prefs = getSharedPreferences(CaptureActivity.PREFS, MODE_PRIVATE)
-        val values = intArrayOf(0, 90, 180, 270)
-        val labels = arrayOf(
-            "No rotation — phone mounted sideways (landscape)",
-            "90° — phone mounted upright (portrait)",
-            "180°",
-            "270°",
-        )
-        val current = values.indexOf(prefs.getInt(PREF_ROTATION, 0)).coerceAtLeast(0)
-        AlertDialog.Builder(this)
-            .setTitle("Which way is up?")
-            .setSingleChoiceItems(labels, current, null)
-            .setPositiveButton(R.string.export_pipeline) { dialog, _ ->
-                val rotation = values[(dialog as AlertDialog).listView.checkedItemPosition.coerceAtLeast(0)]
-                prefs.edit().putInt(PREF_ROTATION, rotation).apply()
-                runExport(dir, rotation)
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+        val current = prefs.getInt(CloudSyncSettings.KEY_EXPORT_ROTATION, 0)
+        ExportRotationDialog.show(this, current, getString(R.string.export_pipeline)) { rotation ->
+            prefs.edit().putInt(CloudSyncSettings.KEY_EXPORT_ROTATION, rotation).apply()
+            runExport(dir, rotation)
+        }
     }
 
     private fun runExport(dir: File, rotation: Int) {

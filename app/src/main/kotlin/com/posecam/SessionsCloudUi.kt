@@ -26,6 +26,7 @@ import com.posecam.core.sync.CloudSettingsSnapshot
 import com.posecam.core.sync.CloudSync
 import com.posecam.core.sync.CloudSyncSettings
 import com.posecam.core.sync.CloudUiText
+import com.posecam.core.sync.ExportState
 import com.posecam.core.sync.MobileDataGuard
 import com.posecam.core.sync.Pipe
 import com.posecam.core.sync.SessionCloudStatus
@@ -93,7 +94,7 @@ class SessionsCloudUi(
 
     /** The second line of a recording's row. */
     fun rowLine(sessionId: String): String =
-        CloudUiText.rowStatus(summaries[sessionId], settings.policy, waitingForNetwork)
+        CloudUiText.rowStatus(summaries[sessionId], settings.policy, waitingForNetwork, settings.exportRotationDegrees != null)
 
     /** The icon drawn before a recording's row; one per cloud status, so the state reads at a glance. */
     @DrawableRes
@@ -122,6 +123,7 @@ class SessionsCloudUi(
                 Action(CloudUiText.pipeActionLabel(pipe)) {
                     sync.coordinator.choosePipe(sessionId, pipe)
                     Toast.makeText(activity, "Filed under ${pipe.label}", Toast.LENGTH_SHORT).show()
+                    ExportRotationDialog.askOnceIfUnset(activity, sync)
                 }
             }
         }
@@ -137,7 +139,29 @@ class SessionsCloudUi(
             )
         }
         val info = CloudCardAction.infoMessage(status, summary, recordingInProgress = false)
-        return if (info.isEmpty()) emptyList() else listOf(Action("Cloud: $info") {})
+        return (if (info.isEmpty()) emptyList() else listOf(Action("Cloud: $info") {})) + exportActions(sessionId, summary)
+    }
+
+    /**
+     * What a synced recording can still do about its pipeline export: say why there is none (it will never appear in
+     * LabelNow, which a bare "Synced" would hide), or run a crashed export / failed export upload again.
+     */
+    private fun exportActions(sessionId: String, summary: SessionCloudSummary?): List<Action> {
+        if (summary == null || !summary.isSynced) return emptyList()
+        val actions = mutableListOf<Action>()
+        CloudUiText.missingExportDetail(summary)?.let { detail ->
+            actions += Action("Why no pipeline export?") {
+                AlertDialog.Builder(activity).setTitle("No pipeline export").setMessage(detail)
+                    .setPositiveButton(R.string.close, null).show()
+            }
+        }
+        if (summary.exportState == ExportState.FAILED || summary.exportFilesFailed > 0) {
+            actions += Action("Retry pipeline export") {
+                sync.coordinator.syncSession(sessionId, retryFailedFiles = true)
+                Toast.makeText(activity, "Retrying the pipeline export…", Toast.LENGTH_SHORT).show()
+            }
+        }
+        return actions
     }
 
     fun deleteWarning(sessionId: String): String = CloudUiText.deleteWarning(true, summaries[sessionId])
@@ -260,6 +284,17 @@ class SessionsCloudUi(
         }
         content.addView(policyGroup)
 
+        content.addView(header("Pipeline export", "Recordings are turned into the labeling format and uploaded automatically. Which way is up in the video?"))
+        val rotation = TextView(activity).apply {
+            text = CloudUiText.rotationLabel(sync.settings.exportRotationDegrees)
+            setPadding(dp(4), dp(4), 0, dp(4))
+        }
+        content.addView(rotation)
+        content.addView(Button(activity).apply {
+            text = "Change"
+            setOnClickListener { editRotation(rotation) }
+        })
+
         content.addView(header("Free up space", "Remove a recording from this phone once the cloud has confirmed it."))
         val days = CloudSyncSettings.RETENTION_CHOICES_DAYS
         val cleanupGroup = RadioGroup(activity)
@@ -294,6 +329,13 @@ class SessionsCloudUi(
             .setView(ScrollView(activity).apply { addView(content) })
             .setPositiveButton("Done", null)
             .show()
+    }
+
+    private fun editRotation(label: TextView) {
+        ExportRotationDialog.show(activity, sync.settings.exportRotationDegrees, "Save") {
+            sync.setExportRotation(it)
+            label.text = CloudUiText.rotationLabel(it)
+        }
     }
 
     // ---- notification permission -----------------------------------------------------------

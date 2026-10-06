@@ -2,6 +2,7 @@ package com.posecam.core.sync
 
 import android.content.Context
 import androidx.work.NetworkType
+import com.posecam.CaptureActivity
 
 /**
  * When uploads may use the network. Uploads can be multiple GB, so the default is unmetered
@@ -26,11 +27,14 @@ data class CloudSettingsSnapshot(
     val autoCleanupEnabled: Boolean,
     /** Ask before a manual upload starts on a metered (mobile) network. */
     val confirmMobileData: Boolean = true,
+    /** Clockwise degrees applied to every pipeline export; null until the collector has chosen. */
+    val exportRotationDegrees: Int? = null,
 )
 
 /** Persistent cloud-sync preferences. */
 class CloudSyncSettings(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val capturePrefs = context.applicationContext.getSharedPreferences(CaptureActivity.PREFS, Context.MODE_PRIVATE)
 
     var policy: SyncPolicy
         get() = prefs.getString(KEY_POLICY, null)
@@ -52,12 +56,26 @@ class CloudSyncSettings(context: Context) {
         get() = prefs.getBoolean(KEY_CONFIRM_MOBILE, true)
         set(value) = prefs.edit().putBoolean(KEY_CONFIRM_MOBILE, value).apply()
 
+    /**
+     * Clockwise rotation of the exported video so the gripper jaws point up, which depends on how the phone sits on the
+     * mount. A setting rather than a question per take: recordings are exported automatically once they are filed, and
+     * nothing is exported until this has been chosen (a wrongly rotated video would be uploaded and labeled unnoticed).
+     *
+     * Stored under the key "Export for pipeline" in Recordings has always used, in the same preferences file, so the
+     * value a collector already chose there carries over and the two can never disagree.
+     */
+    var exportRotationDegrees: Int?
+        get() = capturePrefs.takeIf { it.contains(KEY_EXPORT_ROTATION) }?.getInt(KEY_EXPORT_ROTATION, 0)?.takeIf { it in ROTATION_CHOICES }
+        set(value) = capturePrefs.edit().apply {
+            if (value == null) remove(KEY_EXPORT_ROTATION) else putInt(KEY_EXPORT_ROTATION, value)
+        }.apply()
+
     /** The Android 13+ notification prompt is shown once, ever; refusing it must not make the app ask again. */
     var notificationPermissionAsked: Boolean
         get() = prefs.getBoolean(KEY_NOTIFICATION_ASKED, false)
         set(value) = prefs.edit().putBoolean(KEY_NOTIFICATION_ASKED, value).apply()
 
-    fun snapshot() = CloudSettingsSnapshot(policy, retentionDays, autoCleanupEnabled, confirmMobileData)
+    fun snapshot() = CloudSettingsSnapshot(policy, retentionDays, autoCleanupEnabled, confirmMobileData, exportRotationDegrees)
 
     companion object {
         const val DEFAULT_RETENTION_DAYS = 7
@@ -69,6 +87,10 @@ class CloudSyncSettings(context: Context) {
         private const val KEY_AUTO_CLEANUP = "auto_cleanup"
         private const val KEY_CONFIRM_MOBILE = "confirm_mobile_data"
         private const val KEY_NOTIFICATION_ASKED = "notification_permission_asked"
+
+        /** The key (in [CaptureActivity.PREFS]) the manual "Export for pipeline" has always remembered the rotation under. */
+        const val KEY_EXPORT_ROTATION = "export_rotation_degrees"
+        val ROTATION_CHOICES = listOf(0, 90, 180, 270)
     }
 }
 

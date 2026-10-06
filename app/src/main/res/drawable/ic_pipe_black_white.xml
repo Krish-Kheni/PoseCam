@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The pipe ring, left half black and right half white: the Black/White pipe, next to ic_pipe_black / ic_pipe_white. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Left half ring, black. -->
+    <path
+        android:fillColor="#212121"
+        android:pathData="M12,4a8,8 0 0,0 0,16v-4a4,4 0 0,1 0,-8z" />
+    <!-- Right half ring, white with the same grey outline as the white pipe. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:strokeColor="#616161"
+        android:strokeWidth="1.2"
+        android:pathData="M12,4a8,8 0 0,1 0,16v-4a4,4 0 0,0 0,-8z" />
+</vector>

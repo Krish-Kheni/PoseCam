@@ -86,6 +86,18 @@ class PipeChoiceTest {
     }
 
     @Test
+    fun theBlackWhitePipeGoesToTheBlackWhiteFolder() = runBlocking {
+        finishedTake()
+        coordinator.choosePipe(id, Pipe.BLACK_WHITE)
+        until { f.repo.session(id)?.pipe == "black-white" }
+
+        f.processor.runQueue()
+
+        assertEquals("black-white", f.api.createdPipes[id]) // the backend files everything under black-white-pipe/
+        assertNotNull(f.repo.session(id)!!.syncedAt)
+    }
+
+    @Test
     fun twoRecordingsCanGoToDifferentPipes() = runBlocking {
         val other = "capture-20260917T091000-b00002"
         finishedTake()
@@ -179,7 +191,10 @@ class PipeChoiceTest {
     fun theMenuOffersOneEntryPerPipeForAnUnfiledRecording() {
         assertEquals(CloudCardAction.CHOOSE_PIPE, CloudCardAction.forStatus(SessionCloudStatus.AWAITING_PIPE, false))
         assertEquals(CloudCardAction.INFO, CloudCardAction.forStatus(SessionCloudStatus.AWAITING_PIPE, true))
-        assertEquals(listOf("Upload as White pipe", "Upload as Black pipe"), Pipe.entries.map { CloudUiText.pipeActionLabel(it) })
+        assertEquals(
+            listOf("Upload as White pipe", "Upload as Black pipe", "Upload as Black/White pipe"),
+            Pipe.entries.map { CloudUiText.pipeActionLabel(it) },
+        )
     }
 
     @Test
@@ -189,6 +204,7 @@ class PipeChoiceTest {
         assertEquals("2 need a pipe", CloudUiText.storageSummary(listOf(s, s)))
         assertEquals("Uploading to White pipe (Wi-Fi only).", CloudUiText.pipeChosenMessage(Pipe.WHITE, SyncPolicy.WIFI_ONLY, true))
         assertEquals("Black pipe: waiting for Wi-Fi to upload.", CloudUiText.pipeChosenMessage(Pipe.BLACK, SyncPolicy.WIFI_ONLY, false))
+        assertEquals("Uploading to Black/White pipe (Wi-Fi only).", CloudUiText.pipeChosenMessage(Pipe.BLACK_WHITE, SyncPolicy.WIFI_ONLY, true))
         assertTrue(CloudUiText.pipeChosenMessage(Pipe.BLACK, SyncPolicy.MANUAL_ONLY, true).contains("manual"))
     }
 
@@ -196,9 +212,13 @@ class PipeChoiceTest {
     fun pipeNamesRoundTripTheWireFormat() {
         assertEquals(Pipe.WHITE, Pipe.fromWire("white"))
         assertEquals(Pipe.BLACK, Pipe.fromWire("black"))
+        assertEquals(Pipe.BLACK_WHITE, Pipe.fromWire("black-white"))
         assertNull(Pipe.fromWire("White"))
+        assertNull(Pipe.fromWire("black_white"))
         assertNull(Pipe.fromWire(null))
-        assertEquals(listOf("White pipe", "Black pipe"), Pipe.entries.map { it.label })
+        assertEquals(listOf("White pipe", "Black pipe", "Black/White pipe"), Pipe.entries.map { it.label })
+        // The wire values are the S3 folders without "-pipe": white-pipe, black-pipe, black-white-pipe.
+        assertEquals(listOf("white-pipe", "black-pipe", "black-white-pipe"), Pipe.entries.map { "${it.wire}-pipe" })
     }
 
     private suspend fun summary() = SessionCloudSummary.from(

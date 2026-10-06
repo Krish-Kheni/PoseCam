@@ -122,16 +122,18 @@ class CloudHttpException(
     /**
      * Rate limiting, server errors and auth problems are all things a later attempt can fix
      * (auth providers refresh tokens; throttling and outages end). Other 4xx are the
-     * client's own mistake and will fail identically every time.
+     * client's own mistake and will fail identically every time. A 403 PATH_NOT_ALLOWED is not an auth problem: the
+     * server's allow-list refuses that path (e.g. an export file whose stem differs from its folder's), for good.
      */
     override val retryable: Boolean
-        get() = status == 408 || status == 425 || status == 429 || status == 401 || status == 403 ||
-            status >= 500 || code in TRANSIENT_CODES
+        get() = status == 408 || status == 425 || status == 429 || status == 401 ||
+            (status == 403 && code != PATH_NOT_ALLOWED) || status >= 500 || code in TRANSIENT_CODES
 
     companion object {
         /** S3 answers some transient conditions with a 400: a body corrupted in flight, a stalled upload. */
         private val TRANSIENT_CODES = setOf("BadDigest", "RequestTimeout", "SlowDown", "InternalError")
 
+        const val PATH_NOT_ALLOWED = "PATH_NOT_ALLOWED"
         const val SESSION_NOT_FOUND = "SESSION_NOT_FOUND"
         const val UPLOAD_NOT_FOUND = "UPLOAD_NOT_FOUND"
         const val FILE_NOT_FOUND = "FILE_NOT_FOUND"

@@ -51,6 +51,38 @@ enum class UploadSourceKind {
 
     /** A zip of up to [FrameChunks.FRAMES_PER_CHUNK] JPEGs, built on demand and staged outside the session. */
     FRAME_CHUNK,
+
+    /**
+     * A file of the pipeline export (`export/<stem>/...`). It was written once, into [UploadStaging], by
+     * [PipelineExportStage]; the session folder holds no copy of it, so it is deleted from staging once verified.
+     */
+    EXPORT,
+}
+
+/**
+ * Where a recording stands on its pipeline export (`RGB_<stem>.mp4` + `AR_Pose_<stem>.txt`, the files LabelNow turns into
+ * a labelable video). The export is derived from the raw recording and never holds up SYNCED, but it is the part of the
+ * upload that LabelNow actually uses, so every outcome other than [DONE] is shown to the collector.
+ */
+enum class ExportState {
+    /** Not exported yet (or interrupted by a take, or waiting for the rotation setting). Retried on every run. */
+    PENDING,
+
+    /** Exported and its files queued: from here on they are ordinary queue rows. */
+    DONE,
+
+    /** The recording is off protocol (wrong size, fps, focus): it can never appear in LabelNow. Not retried. */
+    OFF_PROTOCOL,
+
+    /** The recording cannot be exported for another lasting reason (killed take, no clean stretch, frames missing). Not retried. */
+    NOT_EXPORTABLE,
+
+    /** The export crashed for a reason that may pass (storage, encoder). Only a user retry runs it again. */
+    FAILED,
+    ;
+
+    /** True when this recording will not (or not yet) have an export in LabelNow. */
+    val isMissing: Boolean get() = this != DONE
 }
 
 /** What the Sessions UI shows; derived from queue state, never stored. */

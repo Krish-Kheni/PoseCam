@@ -65,6 +65,41 @@ class UploadDatabaseTest {
     }
 
     @Test
+    fun exportRowsAreSummarisedApartFromTheRequiredOnes_realSql() = runBlocking {
+        dao.insertSessionIgnore(session("s1"))
+        dao.insertUploadIgnore(row("s1", "manifest.json", UploadState.VERIFIED))
+        dao.insertUploadIgnore(row("s1", "export/a/RGB_a.mp4", UploadState.VERIFIED, required = false))
+        dao.insertUploadIgnore(row("s1", "export/a/AR_Pose_a.txt", UploadState.FAILED, required = false))
+        dao.insertUploadIgnore(row("s1", "export/a/posecam_export.json", UploadState.PENDING, required = false))
+        dao.insertUploadIgnore(row("s2", "manifest.json", UploadState.VERIFIED))
+
+        val export = dao.observeExportAggregates().first().single()
+        val required = dao.observeAggregates().first().single { it.sessionId == "s1" }
+
+        assertEquals(SessionExportAggregate("s1", files = 3, verifiedFiles = 1, failedFiles = 1), export)
+        assertEquals(1, required.totalFiles) // exports never change the raw upload's totals or status
+        assertEquals(1, required.verifiedFiles)
+    }
+
+    @Test
+    fun completingAnExportQueuesItsRowsAheadOfTheRawFilesAndMarksItDone_realDatabase() = runBlocking {
+        dao.insertSessionIgnore(session("s1").copy(pipe = "white", recordingFinal = true))
+        repo.enqueue("s1", java.io.File("/x/s1"), QueuedFile("poses.csv", "/x/s1/poses.csv", UploadSourceKind.PLAIN, 10))
+        val stem = "2026-09-17-09_00_05-a3f9c1-s1"
+        val files = listOf("RGB_$stem.mp4", "AR_Pose_$stem.txt", "posecam_export.json").map {
+            QueuedFile("export/$stem/$it", "/staging/s1/export/$stem/$it", UploadSourceKind.EXPORT, 5)
+        }
+
+        repo.completeExport("s1", files)
+
+        assertEquals(ExportState.DONE, dao.getSession("s1")!!.exportState)
+        assertTrue(dao.sessionsNeedingExport().isEmpty())
+        val queued = dao.uploadsForSession("s1").sortedWith(compareBy({ it.createdAt }, { it.id }))
+        assertEquals(listOf(false, false, false, true), queued.map { it.required })
+        assertTrue(queued.take(3).all { it.kind == UploadSourceKind.EXPORT && it.fileType == UploadFileType.EXPORT })
+    }
+
+    @Test
     fun setPipeFilesTheSessionOnlyUntilItExistsInTheCloud_realDatabase() = runBlocking {
         dao.insertSessionIgnore(session("s1", created = false).copy(pipe = null))
         assertTrue(dao.sessionsNeedingCreation().isEmpty())

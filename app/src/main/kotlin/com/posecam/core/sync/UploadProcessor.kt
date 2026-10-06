@@ -57,6 +57,8 @@ class UploadProcessor(
     private val isRecording: () -> Boolean = { ActiveRecordingSessions.snapshot().isNotEmpty() },
     /** How often the in-flight byte count of a single PUT is persisted for the progress display. */
     private val progressIntervalMs: Long = 1_000,
+    /** Makes each filed recording's pipeline export before anything is sent; null leaves exporting off. */
+    private val exportStage: PipelineExportStage? = null,
 ) {
     private val multipart = MultipartUploader(api, transport, repository, hasher)
 
@@ -69,7 +71,7 @@ class UploadProcessor(
     /** Whether a run could do anything: lets the worker skip starting a foreground service for nothing. */
     suspend fun hasWork(): Boolean =
         repository.runnable().isNotEmpty() || repository.sessionsNeedingCreation().isNotEmpty() ||
-            repository.sessionsReadyToComplete().isNotEmpty()
+            repository.sessionsReadyToComplete().isNotEmpty() || exportStage?.hasWork() == true
 
     suspend fun runQueue(onlySessionId: String? = null): QueueRunResult = runQueueReport(onlySessionId).result
 
@@ -97,6 +99,11 @@ class UploadProcessor(
             QueueRunResult.RETRY -> needsRetry = true
             QueueRunResult.DONE -> Unit
         }
+
+        // The export first: its files join the queue (at the front) before the first file is picked below. It writes
+        // only to staging, stops within a frame when a take starts, and can never fail the session it belongs to.
+        exportStage?.runPending(onlySessionId)
+        if (isRecording()) return QueueRunResult.DONE
 
         // One failing file must not starve the rest, so it is skipped for the remainder of this run
         // and retried by the next (backed-off) run. A dead network aborts the run outright.
@@ -166,6 +173,12 @@ class UploadProcessor(
                     // Build (or find) the zip first: its real size replaces the estimate queued at finalize.
                     file = materializer.ensure(row)
                     row = repository.get(row.id) ?: return FileOutcome.Done
+                }
+                if (!file.isFile && row.kind == UploadSourceKind.EXPORT) {
+                    // Staged export files exist nowhere else (the session folder holds none): make the export again.
+                    repository.resetExport(row.sessionId)
+                    CloudLog.w("export_staging_lost", "session" to row.sessionId, "path" to row.relativePath)
+                    return FileOutcome.Retry(networkDown = false)
                 }
                 if (!file.isFile) {
                     repository.markFailed(row.id, "Local file is missing")

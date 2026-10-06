@@ -62,6 +62,15 @@ class CloudSync private constructor(context: Context) {
     private val scheduler: UploadScheduler by lazy { WorkManagerUploadScheduler(appContext, settings) }
     val coordinator: UploadCoordinator by lazy { UploadCoordinator(repository, scheduler, staging) }
 
+    private val exportStage: PipelineExportStage by lazy {
+        PipelineExportStage(
+            repository = repository,
+            staging = staging,
+            exporter = PipelineSessionExporter(BuildConfig.VERSION_NAME),
+            rotation = { settings.exportRotationDegrees },
+        )
+    }
+
     private val api: CloudApi by lazy { CloudApiClient(config, authProvider, installationId) }
     val processor: UploadProcessor by lazy {
         UploadProcessor(
@@ -72,6 +81,7 @@ class CloudSync private constructor(context: Context) {
             installationId = { installationId },
             appVersion = BuildConfig.VERSION_NAME,
             materializer = FrameChunkMaterializer(repository, UploadThreads.dispatcher),
+            exportStage = exportStage,
         )
     }
 
@@ -106,6 +116,13 @@ class CloudSync private constructor(context: Context) {
     fun setRetentionDays(days: Int) {
         settings.retentionDays = days
         _settings.value = settings.snapshot()
+    }
+
+    /** The collector chose which way is up in exported videos: exports that were waiting for it can start. */
+    fun setExportRotation(degrees: Int) {
+        settings.exportRotationDegrees = degrees
+        _settings.value = settings.snapshot()
+        if (config.enabled) coordinator.onExportSettingsChanged()
     }
 
     fun setConfirmMobileData(enabled: Boolean) {

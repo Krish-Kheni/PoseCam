@@ -1,5 +1,6 @@
 package com.posecam.core.sync
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -77,6 +78,22 @@ data class CloudSessionEntity(
      * the cloud and none of its files are uploaded, because the pipe decides the cloud folder they go to.
      */
     val pipe: String? = null,
+    /** Pipeline export progress (see [ExportState]). Added in database version 2; existing rows start at PENDING. */
+    @ColumnInfo(defaultValue = "PENDING")
+    val exportState: ExportState = ExportState.PENDING,
+    /** Why the export is missing, in the collector's words: the exporter's message. Null unless [exportState] says so. */
+    val exportNote: String? = null,
+)
+
+/**
+ * Per-session roll-up over the pipeline-export files (the ones that are not required for SYNCED). Kept apart from
+ * [SessionUploadAggregate] so an export that fails to upload can be shown without ever un-syncing the session.
+ */
+data class SessionExportAggregate(
+    val sessionId: String,
+    val files: Int,
+    val verifiedFiles: Int,
+    val failedFiles: Int,
 )
 
 /** Per-session roll-up over the *required* files, used for status and progress. */

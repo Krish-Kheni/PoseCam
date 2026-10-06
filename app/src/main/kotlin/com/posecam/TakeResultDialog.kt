@@ -6,7 +6,7 @@ import com.posecam.core.sync.Pipe
 
 /**
  * The dialog shown when a take ends. Without cloud upload it is exactly what PoseCam always showed: a verdict and Close.
- * With cloud upload on, a take that "looks good" asks which pipe to file it under (White pipe / Black pipe); the upload
+ * With cloud upload on, a take that "looks good" asks which pipe to file it under (White / Black / Black/White pipe); the upload
  * starts only after that choice, and into that pipe's folder. A take that should be redone keeps Close: it is not uploaded
  * automatically, but can still be filed later from Recordings.
  */
@@ -21,6 +21,7 @@ object TakeResultDialog {
             dialog.setCancelable(false)
                 .setPositiveButton(Pipe.WHITE.label) { _, _ -> onPipe(Pipe.WHITE) }
                 .setNegativeButton(Pipe.BLACK.label) { _, _ -> onPipe(Pipe.BLACK) }
+                .setNeutralButton(Pipe.BLACK_WHITE.label) { _, _ -> onPipe(Pipe.BLACK_WHITE) }
         } else {
             dialog.setPositiveButton(R.string.close, null)
         }
@@ -33,6 +34,10 @@ object TakeResultDialog {
             }
             shown.getButton(AlertDialog.BUTTON_NEGATIVE)?.apply {
                 setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_pipe_black, 0, 0, 0)
+                compoundDrawablePadding = gap
+            }
+            shown.getButton(AlertDialog.BUTTON_NEUTRAL)?.apply {
+                setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_pipe_black_white, 0, 0, 0)
                 compoundDrawablePadding = gap
             }
         }

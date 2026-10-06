@@ -76,12 +76,23 @@ class FakeUploadDao : UploadDao {
         return rows.size
     }
 
+    override suspend fun deleteUpload(id: Long) {
+        uploads.remove(id)
+        changed()
+    }
+
     override suspend fun deleteUploadsForSession(sessionId: String) {
         uploads.values.removeAll { it.sessionId == sessionId }
         changed()
     }
 
     override fun observeAggregates(): Flow<List<SessionUploadAggregate>> = changes.map { aggregates() }
+
+    override fun observeExportAggregates(): Flow<List<SessionExportAggregate>> = changes.map { exportAggregates() }
+
+    fun exportAggregates(): List<SessionExportAggregate> = uploads.values.filter { !it.required }.groupBy { it.sessionId }.map { (id, rows) ->
+        SessionExportAggregate(id, rows.size, rows.count { it.state == UploadState.VERIFIED }, rows.count { it.state == UploadState.FAILED })
+    }
 
     fun aggregates(): List<SessionUploadAggregate> = uploads.values.filter { it.required }.groupBy { it.sessionId }.map { (id, rows) ->
         SessionUploadAggregate(
@@ -103,9 +114,19 @@ class FakeUploadDao : UploadDao {
      */
     var defaultPipe: String? = "white"
 
+    /**
+     * Test convenience, like [defaultPipe]: new sessions start with this export state. Production sessions start PENDING
+     * (their export is still to be made); the many tests that are about something else would otherwise have retention
+     * waiting for an export that no test of theirs is making, so they get DONE and the export tests set PENDING.
+     */
+    var defaultExportState: ExportState = ExportState.DONE
+
     override suspend fun insertSessionIgnore(session: CloudSessionEntity): Long {
         if (session.sessionId in sessions) return -1
-        sessions[session.sessionId] = session.copy(pipe = session.pipe ?: defaultPipe)
+        sessions[session.sessionId] = session.copy(
+            pipe = session.pipe ?: defaultPipe,
+            exportState = if (session.exportState == ExportState.PENDING) defaultExportState else session.exportState,
+        )
         changed()
         return 1
     }
@@ -116,6 +137,10 @@ class FakeUploadDao : UploadDao {
     override fun observeSessions(): Flow<List<CloudSessionEntity>> = changes.map { sessions.values.toList() }
     override suspend fun sessionsNeedingCreation() =
         sessions.values.filter { !it.cloudCreated && !it.permanentFailure && it.pipe != null }
+
+    override suspend fun sessionsNeedingExport() = sessions.values.filter {
+        it.exportState == ExportState.PENDING && it.recordingFinal && !it.permanentFailure && it.pipe != null
+    }
 
     override suspend fun sessionsReadyToComplete() = sessions.values.filter { s ->
         val required = uploads.values.filter { it.sessionId == s.sessionId && it.required }

@@ -3,7 +3,13 @@ package com.posecam.core.sync
 /** Every user-facing string of the Recordings screen's cloud features, as pure functions so they are unit-tested. */
 object CloudUiText {
     /** The second line of a recording's row. */
-    fun rowStatus(summary: SessionCloudSummary?, policy: SyncPolicy, waitingForNetwork: Boolean): String {
+    fun rowStatus(
+        summary: SessionCloudSummary?,
+        policy: SyncPolicy,
+        waitingForNetwork: Boolean,
+        /** False until the collector has chosen the export rotation: exports wait for it. */
+        exportRotationSet: Boolean = true,
+    ): String {
         if (summary == null) return "On this phone only"
         return when (val status = summary.displayStatus(waitingForNetwork)) {
             SessionCloudStatus.LOCAL_ONLY -> "On this phone only"
@@ -13,9 +19,41 @@ object CloudUiText {
                 if (policy == SyncPolicy.MANUAL_ONLY) "Not uploaded (manual mode)" else "Queued for upload"
             SessionCloudStatus.UPLOADING -> CloudCardAction.infoMessage(status, summary, recordingInProgress = false)
             SessionCloudStatus.VERIFYING -> "Verifying…"
-            SessionCloudStatus.SYNCED -> "Synced"
+            SessionCloudStatus.SYNCED -> syncedLine(summary, exportRotationSet)
             SessionCloudStatus.FAILED -> "Upload failed, tap to retry"
         }
+    }
+
+    /**
+     * "Synced", plus what is wrong with the pipeline export if anything. A recording without an export will never appear
+     * in LabelNow, so a bare "Synced" would hide exactly the thing the collector needs to know.
+     */
+    fun syncedLine(summary: SessionCloudSummary, exportRotationSet: Boolean = true): String = when {
+        summary.exportState == ExportState.OFF_PROTOCOL -> "Synced — no pipeline export (off protocol)"
+        summary.exportState == ExportState.NOT_EXPORTABLE -> "Synced — no pipeline export (cannot be exported)"
+        summary.exportState == ExportState.FAILED -> "Synced — pipeline export failed, tap to retry"
+        summary.exportState == ExportState.PENDING ->
+            if (exportRotationSet) "Synced — making the pipeline export…" else "Synced — set the video rotation to make the pipeline export"
+        summary.exportFilesFailed > 0 -> "Synced — pipeline export upload failed, tap to retry"
+        summary.exportFilesOpen > 0 -> "Synced — uploading the pipeline export…"
+        else -> "Synced"
+    }
+
+    /** The dialog behind "Why no pipeline export?": the exporter's own words, which name what was wrong with the recording. */
+    fun missingExportDetail(summary: SessionCloudSummary): String? = when (summary.exportState) {
+        ExportState.OFF_PROTOCOL, ExportState.NOT_EXPORTABLE ->
+            (summary.exportNote ?: "This recording cannot be exported.") +
+                "\n\nIt is uploaded as raw data, but it will not appear in LabelNow."
+        ExportState.FAILED -> "Making the pipeline export failed: ${summary.exportNote ?: "unknown error"}"
+        else -> null
+    }
+
+    /** What the Cloud sync settings show for the export rotation. */
+    fun rotationLabel(degrees: Int?): String = when (degrees) {
+        null -> "Not set: pipeline exports wait until you choose"
+        0 -> "No rotation (phone mounted sideways)"
+        90 -> "90° (phone mounted upright)"
+        else -> "$degrees°"
     }
 
     /** The action menu label for [CloudCardAction.START] / [CloudCardAction.RETRY]; null for an info-only state. */
