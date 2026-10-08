@@ -144,6 +144,9 @@ export/<stem>/posecam_export.json
   `Uploading 45% · 3 of 9 files`, `Verifying…`, `Synced`, `Upload failed, tap to retry`), a banner with progress and a
   `Sync now` / `Retry` button, `N synced, M waiting` in the storage header, and a **Cloud sync settings** button
   (upload over Wi-Fi only / any network / manual; the video rotation for pipeline exports; delete synced recordings after N days or never; ask before using mobile data).
+* With cloud upload on, **Share raw recording**, **Save raw zip to Downloads** and the export dialog's **Share export** / **Save export to
+  Downloads** are hidden: the app is how recordings leave the phone, and also sending one by hand would make the downstream pipeline redo
+  work the upload already did. Without a backend URL they are all offered exactly as before.
 * Tapping a recording adds `Upload to cloud now` / `Retry failed upload`. Delete now says whether the recording is synced
   or "the only copy".
 * End-of-take dialog: the White / Black / Black/White pipe choice described above, then a toast such as

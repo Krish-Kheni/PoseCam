@@ -155,6 +155,16 @@ class SessionsCloudUi(
                     .setPositiveButton(R.string.close, null).show()
             }
         }
+        // An export waiting for the background job (battery low, no Wi-Fi) can be started by hand, like "Upload to cloud now".
+        val exportWaiting = summary.exportState == ExportState.PENDING || summary.exportFilesOpen > 0
+        if (exportWaiting && settings.exportRotationDegrees != null) {
+            actions += Action("Make pipeline export now") {
+                confirmMobileData(0) {
+                    sync.coordinator.syncSession(sessionId)
+                    Toast.makeText(activity, "Making the pipeline export…", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
         if (summary.exportState == ExportState.FAILED || summary.exportFilesFailed > 0) {
             actions += Action("Retry pipeline export") {
                 sync.coordinator.syncSession(sessionId, retryFailedFiles = true)

@@ -26,7 +26,7 @@ import java.io.FileOutputStream
 import java.util.concurrent.Executors
 
 /**
- * Lists recordings and lets the user share, export or delete them. Recordings live in
+ * Lists recordings and lets the user share, export or delete them (sharing only without cloud upload). Recordings live in
  * app-specific storage, which file managers cannot browse on Android 11+, so Share and
  * Save to Downloads are the ways to get data off a phone without adb.
  */
@@ -164,9 +164,19 @@ class SessionsActivity : Activity() {
         }
     }
 
+    /**
+     * With cloud upload on, the app is how recordings leave the phone. Offering "Share" / "Save to Downloads" as well would
+     * invite sending the same recording through the old manual (Drive) route, which makes the downstream pipeline redo
+     * work the upload already did. Without cloud upload nothing changes: those are the only ways off the phone.
+     */
+    private val offersFileSharing: Boolean get() = cloud == null
+
     private fun showActions(row: Row) {
-        val actions = mutableListOf(getString(R.string.export_pipeline), getString(R.string.share))
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) actions.add(getString(R.string.save_to_downloads))
+        val actions = mutableListOf(getString(R.string.export_pipeline))
+        if (offersFileSharing) {
+            actions.add(getString(R.string.share))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) actions.add(getString(R.string.save_to_downloads))
+        }
         actions.add(getString(R.string.delete))
         // Cloud entries come first and only exist when cloud upload is on; the original entries are untouched.
         val cloudItems = cloud?.actionsFor(row.dir.name).orEmpty()
@@ -221,17 +231,22 @@ class SessionsActivity : Activity() {
                 return@withProgress
             }
             val skipped = if (done.skipped > 0) "\n${done.skipped} short stretch(es) skipped." else ""
+            val next = if (offersFileSharing) "Send the export to whoever processes the data."
+            else "This was a local check: recordings are exported and uploaded automatically once they are filed under a pipe."
             AlertDialog.Builder(this)
                 .setTitle("Exported ${done.folders.size} recording(s)")
-                .setMessage("${done.frames} frames, %.0f MB, rotation $rotation°.$skipped\n\nSend the export to whoever processes the data."
-                    .format(done.bytes / 1e6))
-                .setPositiveButton(R.string.share_export) { _, _ -> shareZip(root, "${root.name}.zip") }
-                .setNeutralButton(R.string.close, null)
+                .setMessage("${done.frames} frames, %.0f MB, rotation $rotation°.$skipped\n\n$next".format(done.bytes / 1e6))
                 .apply {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        setNegativeButton(R.string.save_export_to_downloads) { _, _ ->
-                            saveZipToDownloads(root, "${root.name}.zip")
+                    if (offersFileSharing) {
+                        setPositiveButton(R.string.share_export) { _, _ -> shareZip(root, "${root.name}.zip") }
+                        setNeutralButton(R.string.close, null)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            setNegativeButton(R.string.save_export_to_downloads) { _, _ ->
+                                saveZipToDownloads(root, "${root.name}.zip")
+                            }
                         }
+                    } else {
+                        setPositiveButton(R.string.close, null)
                     }
                 }
                 .show()
