@@ -167,4 +167,60 @@ class SessionExportTest {
         val angle = Math.toDegrees(2 * Math.acos(abs(quat[3])))
         assertEquals(50.0, angle, 1.0)
     }
+
+    // ---- whole recording as one video ----------------------------------------------------------
+
+    private fun rowsOf(n: Int, untracked: Set<Int> = emptySet(), dropped: Set<Int> = emptySet(), jumpAt: Int? = null) =
+        SessionExport.parsePoses(csv(n, untracked, dropped, jumpAt))
+
+    @Test
+    fun aPoseJumpSplitsTheDefaultExportButNotTheWholeRecording() {
+        val export = SessionExport(rowsOf(100, jumpAt = 40))
+
+        assertEquals(2, export.segments().size)
+        val whole = export.wholeRecording().single()
+        assertEquals((0 until 100).toList(), whole.indices)
+        assertEquals(listOf(40), export.jumps) // still reported, so it can be written to the provenance
+        assertTrue(export.omittedWithin(whole).isEmpty())
+    }
+
+    @Test
+    fun aLongRunOfDroppedImagesIsHeldInTheWholeRecordingOnly() {
+        val dropped = (10..19).toSet() // 10 in a row: over the reference exporter's 5-frame hold
+        val rows = rowsOf(60, dropped = dropped)
+
+        assertTrue("default rule splits at it", SessionExport(rows).segments().size > 1)
+
+        val export = SessionExport(rows, imageHoldMaxFrames = Int.MAX_VALUE)
+        val whole = export.wholeRecording().single()
+        assertEquals(60, whole.size)
+        assertEquals(dropped.toList(), whole.reusedImages)
+        // Every held row shows the last JPEG that was actually saved (row 9).
+        assertTrue(dropped.all { export.imageRow(it).frameIndex == 9L })
+    }
+
+    @Test
+    fun wideningTheImageHoldDoesNotWidenPoseInterpolation() {
+        val rows = rowsOf(100, untracked = (30..50).toSet()) // 21 rows with no pose, far over the 5-row cap
+        val export = SessionExport(rows, imageHoldMaxFrames = Int.MAX_VALUE)
+
+        val whole = export.wholeRecording().single()
+
+        assertEquals(79, whole.size) // the rows with no pose cannot be written...
+        assertEquals((30..50).toList(), export.omittedWithin(whole)) // ...and are reported, never invented
+        assertTrue(whole.interpolated.isEmpty())
+    }
+
+    @Test
+    fun aRecordingWithNothingUsableHasNoWholeRecording() {
+        assertTrue(SessionExport(rowsOf(5, untracked = (0 until 5).toSet())).wholeRecording().isEmpty())
+    }
+
+    @Test
+    fun theDefaultRulesAreUnchanged() {
+        // The reference exporter's behaviour is what an export does unless whole-recording mode is asked for.
+        val export = SessionExport(rowsOf(100, jumpAt = 40, dropped = (60..70).toSet()))
+        assertEquals(SessionExport.HOLD_MAX_FRAMES, 5)
+        assertTrue(export.segments().size >= 3)
+    }
 }

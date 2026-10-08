@@ -21,6 +21,12 @@ import kotlin.math.sqrt
 class SessionExport(
     private val rows: List<Row>,
     private val holdMaxFrames: Int = HOLD_MAX_FRAMES,
+    /**
+     * How many dropped images in a row may reuse the previous JPEG. It follows [holdMaxFrames] (the reference exporter's rule)
+     * unless a caller exporting the whole recording as one video widens it; [holdMaxFrames] alone still caps how much pose
+     * motion may be interpolated.
+     */
+    private val imageHoldMaxFrames: Int = holdMaxFrames,
 ) {
     class Row(
         val frameIndex: Long,
@@ -135,7 +141,7 @@ class SessionExport(
             if (rows[i].imageSaved) {
                 lastSaved = i
                 imageSource[i] = i
-            } else if (lastSaved != null && i - lastSaved <= holdMaxFrames) {
+            } else if (lastSaved != null && i - lastSaved <= imageHoldMaxFrames) {
                 imageSource[i] = lastSaved
                 reusedImageRows.add(i)
             }
@@ -165,6 +171,31 @@ class SessionExport(
         }
         flush()
         return out
+    }
+
+    /**
+     * The whole recording as ONE segment: every row that has a pose and an image, in order, whatever lies between them.
+     * Unlike [segments] it does not split at pose jumps, so a jump stays inside the video (the poses either side are in
+     * different ARCore frames); [jumps] says where. A row with no pose at all (tracking lost for longer than the
+     * interpolation cap) cannot be written, so it is left out and the video steps over it: see [omittedWithin].
+     */
+    fun wholeRecording(): List<Segment> {
+        val indices = rows.indices.filter { position[it] != null && quaternion[it] != null && imageSource[it] != null }
+        if (indices.isEmpty()) return emptyList()
+        val span = indices.first()..indices.last()
+        return listOf(
+            Segment(
+                indices,
+                interpolatedRows.filter { it in span },
+                reusedImageRows.filter { it in span },
+            ),
+        )
+    }
+
+    /** Rows between a segment's first and last row that it does not contain (only [wholeRecording] has any). */
+    fun omittedWithin(segment: Segment): List<Int> {
+        val kept = segment.indices.toSet()
+        return (segment.first..segment.last).filter { it !in kept }
     }
 
     fun secondsOf(segment: Segment): Double =

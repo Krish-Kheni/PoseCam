@@ -33,6 +33,9 @@ data class CreateSessionRequest(
     val pipe: String? = null,
 )
 
+/** One entry of `GET /v1/pipes`: a category the backend accepts. [color] is "#rrggbb" or null. */
+data class PipeInfo(val id: String, val label: String, val color: String?, val order: Int)
+
 data class CreateSessionResponse(
     val session: CloudSessionView,
     val created: Boolean,

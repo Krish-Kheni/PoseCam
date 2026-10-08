@@ -66,12 +66,21 @@ class CloudSync private constructor(context: Context) {
         PipelineExportStage(
             repository = repository,
             staging = staging,
-            exporter = PipelineSessionExporter(BuildConfig.VERSION_NAME),
+            exporter = PipelineSessionExporter(BuildConfig.VERSION_NAME) { settings.exportAsOneVideo },
             rotation = { settings.exportRotationDegrees },
         )
     }
 
     private val api: CloudApi by lazy { CloudApiClient(config, authProvider, installationId) }
+
+    /** The pipes offered after a take: the backend's list, cached on the phone ([Pipe.DEFAULTS] until the first fetch). */
+    val pipes: PipeCatalog by lazy { PipeCatalog(api, PrefsPipeStore(appContext)) }
+
+    /** Fetches the backend's pipe list in the background; never blocks, never throws, keeps the old list on failure. */
+    fun refreshPipes() {
+        if (!config.enabled) return
+        scope.launch { runCatching { pipes.refresh() } }
+    }
     val processor: UploadProcessor by lazy {
         UploadProcessor(
             repository = repository,
@@ -123,6 +132,11 @@ class CloudSync private constructor(context: Context) {
         settings.exportRotationDegrees = degrees
         _settings.value = settings.snapshot()
         if (config.enabled) coordinator.onExportSettingsChanged()
+    }
+
+    fun setExportAsOneVideo(enabled: Boolean) {
+        settings.exportAsOneVideo = enabled
+        _settings.value = settings.snapshot()
     }
 
     fun setConfirmMobileData(enabled: Boolean) {

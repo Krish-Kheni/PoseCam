@@ -51,6 +51,8 @@ object PipelineExporter {
     /**
      * @param rotateDegrees clockwise rotation of the image so the gripper jaws point up
      * @param outputRoot emptied and filled with one folder per exported segment
+     * @param wholeRecording export the take as ONE video, keeping pose jumps and long runs of dropped images inside it,
+     *   instead of one video per jump-free stretch (the reference exporter's rule, and the default)
      */
     fun export(
         session: File,
@@ -58,6 +60,7 @@ object PipelineExporter {
         rotateDegrees: Int,
         appVersion: String,
         minSeconds: Double = SessionExport.MIN_SECONDS,
+        wholeRecording: Boolean = false,
         onProgress: (stage: String, done: Int, total: Int) -> Unit = { _, _, _ -> },
     ): Result {
         val manifest = JSONObject(File(session, "manifest.json").readText())
@@ -79,8 +82,8 @@ object PipelineExporter {
         val fps = Math.round(manifest.optDouble("measured_fps", 30.0)).toInt().coerceIn(1, 60)
 
         val rows = File(session, "poses.csv").bufferedReader().use { SessionExport.parsePoses(it) }
-        val export = SessionExport(rows)
-        val segments = export.segments()
+        val export = if (wholeRecording) SessionExport(rows, imageHoldMaxFrames = Int.MAX_VALUE) else SessionExport(rows)
+        val segments = if (wholeRecording) export.wholeRecording() else export.segments()
         // Numbered by position among ALL segments, so a stem keeps its name even if the
         // minimum length changes and short stretches drop in or out (matches the PC exporter).
         val usable = segments.withIndex().filter { export.secondsOf(it.value) >= minSeconds }
@@ -127,7 +130,7 @@ object PipelineExporter {
                 }
             }
             File(folder, "posecam_export.json").writeText(
-                provenance(session, manifest, export, segment, position, usable.size, rotateDegrees, fps, appVersion) + "\n"
+                provenance(session, manifest, export, segment, position, usable.size, rotateDegrees, fps, appVersion, wholeRecording) + "\n"
             )
             folders.add(folder)
             frames += written
@@ -138,7 +141,7 @@ object PipelineExporter {
 
     private fun provenance(
         session: File, manifest: JSONObject, export: SessionExport, segment: SessionExport.Segment,
-        index: Int, total: Int, rotateDegrees: Int, fps: Int, appVersion: String,
+        index: Int, total: Int, rotateDegrees: Int, fps: Int, appVersion: String, wholeRecording: Boolean,
     ): String = JSONObject().apply {
         put("source_session", session.name)
         put("source_format", manifest.optString("format_version"))
@@ -146,7 +149,13 @@ object PipelineExporter {
         put("rows_exported", JSONArray(listOf(segment.first, segment.last)))
         put("frames", segment.size)
         put("seconds", Math.round(export.secondsOf(segment) * 1000) / 1000.0)
-        put("selection", "segment ${index + 1} of $total")
+        put("selection", if (wholeRecording) "whole recording" else "segment ${index + 1} of $total")
+        if (wholeRecording) {
+            // The video is one piece, but the poses are not one continuous trajectory where these rows are: say where.
+            put("whole_recording", true)
+            put("pose_jumps_inside_video", JSONArray(export.jumps.filter { it in segment.first..segment.last }))
+            put("omitted_rows_inside_video", JSONArray(export.omittedWithin(segment)))
+        }
         put("pose_jumps_in_source", JSONArray(export.jumps))
         put("interpolated_pose_rows", JSONArray(segment.interpolated))
         put("reused_previous_image_rows", JSONArray(segment.reusedImages))

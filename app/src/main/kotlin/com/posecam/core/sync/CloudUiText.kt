@@ -56,6 +56,14 @@ object CloudUiText {
         else -> "$degrees°"
     }
 
+    /** [rotationLabel] for a settings row's second line, where the long form would wrap. */
+    fun rotationShortLabel(degrees: Int?): String = when (degrees) {
+        null -> "Not set"
+        0 -> "Sideways (no rotation)"
+        90 -> "Upright (90\u00b0)"
+        else -> "$degrees\u00b0"
+    }
+
     /** The action menu label for [CloudCardAction.START] / [CloudCardAction.RETRY]; null for an info-only state. */
     fun actionLabel(action: CloudCardAction): String? = when (action) {
         CloudCardAction.START -> "Upload to cloud now"

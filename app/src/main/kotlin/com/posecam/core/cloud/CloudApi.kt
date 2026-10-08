@@ -6,6 +6,9 @@ package com.posecam.core.cloud
  * throws [CloudException]; callers treat [CloudException.retryable] as "try again later".
  */
 interface CloudApi {
+    /** The pipes (categories) the backend accepts, in the order they should be offered. */
+    suspend fun listPipes(): List<PipeInfo>
+
     /** Idempotent: repeating it for the same session returns the existing record. */
     suspend fun createSession(request: CreateSessionRequest): CreateSessionResponse
 

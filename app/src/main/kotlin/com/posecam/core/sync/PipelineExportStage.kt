@@ -15,9 +15,15 @@ fun interface SessionExporter {
 }
 
 /** The real thing: [PipelineExporter], the same code (and the same rotation) as "Export for pipeline" in Recordings. */
-class PipelineSessionExporter(private val appVersion: String) : SessionExporter {
+class PipelineSessionExporter(
+    private val appVersion: String,
+    /** Read at each export, so flipping the setting applies to the next recording without a restart. */
+    private val wholeRecording: () -> Boolean = { false },
+) : SessionExporter {
     override fun export(session: File, outputRoot: File, rotateDegrees: Int, onProgress: (done: Int, total: Int) -> Unit): List<File> =
-        PipelineExporter.export(session, outputRoot, rotateDegrees, appVersion) { _, done, total -> onProgress(done, total) }.folders
+        PipelineExporter.export(session, outputRoot, rotateDegrees, appVersion, wholeRecording = wholeRecording()) { _, done, total ->
+            onProgress(done, total)
+        }.folders
 }
 
 /**

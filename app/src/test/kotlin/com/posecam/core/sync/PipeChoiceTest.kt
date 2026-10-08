@@ -193,7 +193,7 @@ class PipeChoiceTest {
         assertEquals(CloudCardAction.INFO, CloudCardAction.forStatus(SessionCloudStatus.AWAITING_PIPE, true))
         assertEquals(
             listOf("Upload as White pipe", "Upload as Black pipe", "Upload as Black/White pipe"),
-            Pipe.entries.map { CloudUiText.pipeActionLabel(it) },
+            Pipe.DEFAULTS.map { CloudUiText.pipeActionLabel(it) },
         )
     }
 
@@ -216,9 +216,9 @@ class PipeChoiceTest {
         assertNull(Pipe.fromWire("White"))
         assertNull(Pipe.fromWire("black_white"))
         assertNull(Pipe.fromWire(null))
-        assertEquals(listOf("White pipe", "Black pipe", "Black/White pipe"), Pipe.entries.map { it.label })
+        assertEquals(listOf("White pipe", "Black pipe", "Black/White pipe"), Pipe.DEFAULTS.map { it.label })
         // The wire values are the S3 folders without "-pipe": white-pipe, black-pipe, black-white-pipe.
-        assertEquals(listOf("white-pipe", "black-pipe", "black-white-pipe"), Pipe.entries.map { "${it.wire}-pipe" })
+        assertEquals(listOf("white-pipe", "black-pipe", "black-white-pipe"), Pipe.DEFAULTS.map { "${it.wire}-pipe" })
     }
 
     private suspend fun summary() = SessionCloudSummary.from(

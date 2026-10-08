@@ -14,8 +14,6 @@ import android.widget.Button
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
-import android.widget.RadioButton
-import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
@@ -28,7 +26,6 @@ import com.posecam.core.sync.CloudSyncSettings
 import com.posecam.core.sync.CloudUiText
 import com.posecam.core.sync.ExportState
 import com.posecam.core.sync.MobileDataGuard
-import com.posecam.core.sync.Pipe
 import com.posecam.core.sync.SessionCloudStatus
 import com.posecam.core.sync.SessionCloudSummary
 import com.posecam.core.sync.SyncPolicy
@@ -119,7 +116,7 @@ class SessionsCloudUi(
         val action = CloudCardAction.forStatus(status, recordingInProgress = false)
         if (action == CloudCardAction.CHOOSE_PIPE) {
             // Finished recordings that were never filed (a take to redo, an older recording, a killed take).
-            return Pipe.entries.map { pipe ->
+            return sync.pipes.current().map { pipe ->
                 Action(CloudUiText.pipeActionLabel(pipe)) {
                     sync.coordinator.choosePipe(sessionId, pipe)
                     Toast.makeText(activity, "Filed under ${pipe.label}", Toast.LENGTH_SHORT).show()
@@ -253,86 +250,148 @@ class SessionsCloudUi(
 
     // ---- settings --------------------------------------------------------------------------
 
-    /** One dialog, every option visible; each change is saved the moment it is tapped. */
-    /** Opened from the gear icon in the Recordings header. */
+    /**
+     * Opened from the gear icon in the Recordings header. A short list of rows, each showing its current value; tapping
+     * a row opens a picker (or flips the switch). Every change is saved the moment it is made.
+     */
     fun showSettings() {
         val s = settings
         val density = activity.resources.displayMetrics.density
         fun dp(value: Int) = (value * density).toInt()
 
-        fun header(text: String, hint: String) = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(18), 0, dp(4))
-            addView(TextView(activity).apply { this.text = text; textSize = 16f; setTypeface(typeface, Typeface.BOLD) })
-            addView(TextView(activity).apply { this.text = hint; textSize = 13f; alpha = 0.7f })
+        val accent = android.util.TypedValue().let {
+            activity.theme.resolveAttribute(android.R.attr.colorAccent, it, true)
+            it.data
+        }
+        val rippleBackground = android.util.TypedValue().let {
+            activity.theme.resolveAttribute(android.R.attr.selectableItemBackground, it, true)
+            it.resourceId
         }
 
-        fun radio(label: String, checked: Boolean) = RadioButton(activity).apply {
-            id = View.generateViewId()
-            text = label
-            isChecked = checked
-            setPadding(dp(4), dp(8), 0, dp(8))
+        fun section(text: String) = TextView(activity).apply {
+            this.text = text.uppercase()
+            textSize = 12f
+            letterSpacing = 0.08f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(accent)
+            setPadding(dp(24), dp(20), dp(24), dp(4))
+        }
+
+        /** A settings row: title over a quieter line, with [trailing] (a chevron or a switch) at the end. */
+        fun row(title: String, subtitle: String, trailing: View) = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(dp(24), dp(10), dp(24), dp(10))
+            setBackgroundResource(rippleBackground)
+            addView(
+                LinearLayout(activity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(TextView(activity).apply { text = title; textSize = 16f; tag = "title" })
+                    addView(TextView(activity).apply { text = subtitle; textSize = 13f; alpha = 0.65f; tag = "subtitle" })
+                },
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+            )
+            addView(trailing)
+        }
+
+        fun chevron() = TextView(activity).apply {
+            text = "\u203A"
+            textSize = 24f
+            alpha = 0.45f
+            setPadding(dp(12), 0, 0, 0)
+        }
+
+        fun LinearLayout.setSubtitle(text: String) {
+            findViewWithTag<TextView>("subtitle").text = text
+        }
+
+        fun choose(title: String, labels: List<String>, selected: Int, onPick: (Int) -> Unit) {
+            AlertDialog.Builder(activity)
+                .setTitle(title)
+                .setSingleChoiceItems(labels.toTypedArray(), selected) { dialog, which ->
+                    onPick(which)
+                    dialog.dismiss()
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
+        }
+
+        fun toggle(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit): LinearLayout {
+            val switch = Switch(activity).apply {
+                isChecked = checked
+                setOnCheckedChangeListener { _, value -> onChange(value) }
+            }
+            return row(title, subtitle, switch).apply { setOnClickListener { switch.toggle() } }
         }
 
         val content = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(4), dp(24), dp(8))
+            setPadding(0, 0, 0, dp(8))
         }
 
-        content.addView(header("Upload over", "When recordings are sent to the cloud."))
+        // ---- Upload ----
+        content.addView(section("Upload"))
         val policies = SyncPolicy.entries
-        val policyHints = mapOf(
-            SyncPolicy.WIFI_ONLY to "Wi-Fi only (recommended)",
-            SyncPolicy.ANY_NETWORK to "Any network, including mobile data",
-            SyncPolicy.MANUAL_ONLY to "Manual only: upload when I press Sync now",
+        val policyChoices = mapOf(
+            SyncPolicy.WIFI_ONLY to ("Wi-Fi only (recommended)" to "Wi-Fi only"),
+            SyncPolicy.ANY_NETWORK to ("Wi-Fi or mobile data" to "Wi-Fi or mobile data"),
+            SyncPolicy.MANUAL_ONLY to ("Manual only (tap Sync now)" to "Manual only"),
         )
-        val policyGroup = RadioGroup(activity)
-        val policyIds = policies.map { policy -> radio(policyHints.getValue(policy), policy == s.policy).also { policyGroup.addView(it) }.id }
-        policyGroup.setOnCheckedChangeListener { _, checkedId ->
-            val index = policyIds.indexOf(checkedId)
-            if (index >= 0) sync.setPolicy(policies[index])
-        }
-        content.addView(policyGroup)
-
-        content.addView(header("Pipeline export", "Recordings are turned into the labeling format and uploaded automatically. Which way is up in the video?"))
-        val rotation = TextView(activity).apply {
-            text = CloudUiText.rotationLabel(sync.settings.exportRotationDegrees)
-            setPadding(dp(4), dp(4), 0, dp(4))
-        }
-        content.addView(rotation)
-        content.addView(Button(activity).apply {
-            text = "Change"
-            setOnClickListener { editRotation(rotation) }
-        })
-
-        content.addView(header("Free up space", "Remove a recording from this phone once the cloud has confirmed it."))
-        val days = CloudSyncSettings.RETENTION_CHOICES_DAYS
-        val cleanupGroup = RadioGroup(activity)
-        val neverId = radio("Never delete", !s.autoCleanupEnabled).also { cleanupGroup.addView(it) }.id
-        val dayIds = days.map { d ->
-            radio(if (d == 1) "After 1 day" else "After $d days", s.autoCleanupEnabled && s.retentionDays == d)
-                .also { cleanupGroup.addView(it) }.id
-        }
-        cleanupGroup.setOnCheckedChangeListener { _, checkedId ->
-            if (checkedId == neverId) {
-                sync.setAutoCleanupEnabled(false)
-            } else {
-                val index = dayIds.indexOf(checkedId)
-                if (index >= 0) {
-                    sync.setAutoCleanupEnabled(true)
-                    sync.setRetentionDays(days[index])
-                }
+        var policy = s.policy
+        val policyRow = row("Upload over", policyChoices.getValue(policy).second, chevron())
+        policyRow.setOnClickListener {
+            choose("Upload over", policies.map { policyChoices.getValue(it).first }, policies.indexOf(policy)) { index ->
+                policy = policies[index]
+                sync.setPolicy(policy)
+                policyRow.setSubtitle(policyChoices.getValue(policy).second)
             }
         }
-        content.addView(cleanupGroup)
+        content.addView(policyRow)
+        content.addView(
+            toggle("Ask before using mobile data", "Only for manual uploads", s.confirmMobileData) { sync.setConfirmMobileData(it) },
+        )
 
-        content.addView(header("Mobile data", "Applies to manual uploads on a metered network."))
-        content.addView(Switch(activity).apply {
-            text = "Ask before using mobile data"
-            isChecked = s.confirmMobileData
-            setPadding(dp(4), dp(8), 0, dp(8))
-            setOnCheckedChangeListener { _, checked -> sync.setConfirmMobileData(checked) }
-        })
+        // ---- Pipeline export ----
+        content.addView(section("Pipeline export"))
+        val rotationRow = row("Video orientation", CloudUiText.rotationShortLabel(sync.settings.exportRotationDegrees), chevron())
+        rotationRow.setOnClickListener {
+            editRotation { rotationRow.setSubtitle(CloudUiText.rotationShortLabel(it)) }
+        }
+        content.addView(rotationRow)
+        content.addView(
+            toggle("One video per recording", "Don\u2019t split at tracking jumps (new exports)", sync.settings.exportAsOneVideo) {
+                sync.setExportAsOneVideo(it)
+            },
+        )
+
+        // ---- Storage ----
+        content.addView(section("Storage"))
+        val days = CloudSyncSettings.RETENTION_CHOICES_DAYS
+        val cleanupLabels = listOf("Never delete") + days.map { if (it == 1) "After 1 day" else "After $it days" }
+        val cleanupValues = listOf("Never") + days.map { if (it == 1) "1 day" else "$it days" }
+        var cleanupIndex = if (s.autoCleanupEnabled) days.indexOf(s.retentionDays) + 1 else 0
+        val cleanupRow = row("Delete from phone", cleanupValues[cleanupIndex], chevron())
+        cleanupRow.setOnClickListener {
+            choose("Delete from phone", cleanupLabels, cleanupIndex) { index ->
+                cleanupIndex = index
+                if (index == 0) {
+                    sync.setAutoCleanupEnabled(false)
+                } else {
+                    sync.setAutoCleanupEnabled(true)
+                    sync.setRetentionDays(days[index - 1])
+                }
+                cleanupRow.setSubtitle(cleanupValues[index])
+            }
+        }
+        content.addView(cleanupRow)
+        content.addView(
+            TextView(activity).apply {
+                text = "Recordings are removed only after the cloud has confirmed them."
+                textSize = 12f
+                alpha = 0.55f
+                setPadding(dp(24), dp(2), dp(24), dp(4))
+            },
+        )
 
         AlertDialog.Builder(activity)
             .setTitle("Cloud sync settings")
@@ -341,10 +400,10 @@ class SessionsCloudUi(
             .show()
     }
 
-    private fun editRotation(label: TextView) {
+    private fun editRotation(onSaved: (Int) -> Unit) {
         ExportRotationDialog.show(activity, sync.settings.exportRotationDegrees, "Save") {
             sync.setExportRotation(it)
-            label.text = CloudUiText.rotationLabel(it)
+            onSaved(it)
         }
     }
 

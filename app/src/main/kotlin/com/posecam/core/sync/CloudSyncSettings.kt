@@ -29,6 +29,8 @@ data class CloudSettingsSnapshot(
     val confirmMobileData: Boolean = true,
     /** Clockwise degrees applied to every pipeline export; null until the collector has chosen. */
     val exportRotationDegrees: Int? = null,
+    /** Export each recording as ONE video (see [CloudSyncSettings.exportAsOneVideo]). */
+    val exportAsOneVideo: Boolean = false,
 )
 
 /** Persistent cloud-sync preferences. */
@@ -70,12 +72,22 @@ class CloudSyncSettings(context: Context) {
             if (value == null) remove(KEY_EXPORT_ROTATION) else putInt(KEY_EXPORT_ROTATION, value)
         }.apply()
 
+    /**
+     * Export a recording as ONE video even where it has pose jumps or long runs of dropped images, instead of one video per
+     * jump-free stretch. Off by default: splitting is the reference exporter's rule, and a video that contains a pose jump
+     * hands the labeling/training side a trajectory that is not continuous (where, is recorded in `posecam_export.json`).
+     * Only recordings exported after the change are affected; exports already uploaded are not redone.
+     */
+    var exportAsOneVideo: Boolean
+        get() = prefs.getBoolean(KEY_EXPORT_ONE_VIDEO, false)
+        set(value) = prefs.edit().putBoolean(KEY_EXPORT_ONE_VIDEO, value).apply()
+
     /** The Android 13+ notification prompt is shown once, ever; refusing it must not make the app ask again. */
     var notificationPermissionAsked: Boolean
         get() = prefs.getBoolean(KEY_NOTIFICATION_ASKED, false)
         set(value) = prefs.edit().putBoolean(KEY_NOTIFICATION_ASKED, value).apply()
 
-    fun snapshot() = CloudSettingsSnapshot(policy, retentionDays, autoCleanupEnabled, confirmMobileData, exportRotationDegrees)
+    fun snapshot() = CloudSettingsSnapshot(policy, retentionDays, autoCleanupEnabled, confirmMobileData, exportRotationDegrees, exportAsOneVideo)
 
     companion object {
         const val DEFAULT_RETENTION_DAYS = 7
@@ -87,6 +99,7 @@ class CloudSyncSettings(context: Context) {
         private const val KEY_AUTO_CLEANUP = "auto_cleanup"
         private const val KEY_CONFIRM_MOBILE = "confirm_mobile_data"
         private const val KEY_NOTIFICATION_ASKED = "notification_permission_asked"
+        private const val KEY_EXPORT_ONE_VIDEO = "export_as_one_video"
 
         /** The key (in [CaptureActivity.PREFS]) the manual "Export for pipeline" has always remembered the rotation under. */
         const val KEY_EXPORT_ROTATION = "export_rotation_degrees"

@@ -11,6 +11,7 @@ import com.posecam.core.cloud.CreateSessionResponse
 import com.posecam.core.cloud.MultipartPartInfo
 import com.posecam.core.cloud.MultipartStart
 import com.posecam.core.cloud.PartUrlRequest
+import com.posecam.core.cloud.PipeInfo
 import com.posecam.core.cloud.PresignedPart
 import com.posecam.core.cloud.PresignedUpload
 import com.posecam.core.cloud.SessionFileRef
@@ -189,6 +190,14 @@ class FakeCloudApi : CloudApi {
     }
 
     fun callsTo(method: String) = calls.count { it == method || it.startsWith("$method:") }
+
+    /** What GET /v1/pipes returns; tests change it to model the backend gaining or losing a pipe. */
+    var pipesOnServer: List<PipeInfo> = listOf(PipeInfo("white", "White pipes", "#f8fafc", 1))
+
+    override suspend fun listPipes(): List<PipeInfo> {
+        record("listPipes")
+        return pipesOnServer
+    }
 
     override suspend fun createSession(request: CreateSessionRequest): CreateSessionResponse {
         record("createSession", request.sessionId)

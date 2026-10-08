@@ -53,6 +53,18 @@ class PipelineExportSettingsTest {
     }
 
     @Test
+    fun keepingARecordingAsOneVideoIsOffUntilTheCollectorTurnsItOn() {
+        capturePrefs.edit().clear().commit()
+        context.getSharedPreferences("posecam_cloud", Context.MODE_PRIVATE).edit().clear().commit()
+        val settings = CloudSyncSettings(context)
+
+        assertFalse(settings.exportAsOneVideo)
+        settings.exportAsOneVideo = true
+        assertTrue(CloudSyncSettings(context).exportAsOneVideo)
+        assertTrue(settings.snapshot().exportAsOneVideo)
+    }
+
+    @Test
     fun aValueTheExporterCouldNotApplyReadsAsUnset() {
         capturePrefs.edit().clear().putInt("export_rotation_degrees", 45).commit()
 

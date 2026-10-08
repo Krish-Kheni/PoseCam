@@ -120,6 +120,13 @@ export/<stem>/posecam_export.json
   `export_rotation_degrees`, so a value chosen there carries over). Until it has been set, **nothing is exported** (a wrongly
   rotated video would be uploaded and labeled unnoticed); the first time a recording is filed the collector is asked once.
   Exports that waited start as soon as it is chosen.
+* **One video or several.** By default a recording is cut into one video per jump-free stretch (the reference exporter's rule):
+  at every ARCore pose jump, and wherever more than 5 camera images in a row were dropped. **Cloud sync settings → "Keep each
+  recording as one video"** exports the whole take as a single `-s1` video instead. Pose jumps then stay *inside* the video (the poses
+  either side are in different ARCore frames, so the trajectory is not continuous there) and runs of dropped images repeat the last saved
+  frame. Rows with no pose at all cannot be written and are skipped. Where, is listed in `posecam_export.json`
+  (`pose_jumps_inside_video`, `omitted_rows_inside_video`, `whole_recording: true`). Off by default; confirm the labeling/training side can
+  handle a jump inside one video before turning it on for labelers. It applies to exports made after it is switched on.
 * **Export failure never fails the session.** Raw upload completes and the session reaches `SYNCED` without an export. It is
   never silent either, because that recording will not appear in LabelNow:
 

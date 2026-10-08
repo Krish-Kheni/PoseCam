@@ -123,6 +123,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         imuSource = ImuSource(this, imuRecorder)
         // Rebuild/resume the upload queue (also adopts recordings made before cloud upload existed). No-op when off.
         runCatching { CloudSync.get(this).recoverQueue() }
+        runCatching { CloudSync.get(this).refreshPipes() }
 
         surfaceView.preserveEGLContextOnPause = true
         surfaceView.setEGLContextClientVersion(2)
@@ -420,8 +421,11 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
             append(summary.directory.name)
             cloudNote(verdict.redo)?.let { append("\n\n").append(it) }
         }
-        TakeResultDialog.show(this, verdict.headline, body, verdict.redo, cloudEnabled()) { pipe -> onPipeChosen(summary, pipe) }
+        TakeResultDialog.show(this, verdict.headline, body, verdict.redo, cloudEnabled(), availablePipes()) { pipe -> onPipeChosen(summary, pipe) }
     }
+
+    /** The backend's pipes as last cached on this phone; the three built-in ones if none was ever fetched. */
+    private fun availablePipes(): List<Pipe> = runCatching { CloudSync.get(this).pipes.current() }.getOrDefault(Pipe.DEFAULTS)
 
     private fun cloudEnabled(): Boolean = runCatching { CloudSync.get(this).config.enabled }.getOrDefault(false)
 

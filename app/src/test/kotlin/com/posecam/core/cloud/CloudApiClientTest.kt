@@ -46,6 +46,22 @@ class CloudApiClientTest {
     }
 
     @Test
+    fun listPipesGetsTheV1PipesPathAndReadsTheList() = runBlocking {
+        server.enqueue(json("""{"pipes":[{"id":"white","label":"White pipes","color":"#f8fafc","order":1},{"id":"pink","label":"Pink Pipes","color":null,"order":4}]}"""))
+
+        val pipes = client().listPipes()
+
+        val request = server.takeRequest()
+        assertEquals("GET", request.method)
+        assertEquals("/v1/pipes", request.path)
+        assertEquals("install-123", request.getHeader("X-Device-Id"))
+        assertEquals(listOf("white", "pink"), pipes.map { it.id })
+        assertEquals("#f8fafc", pipes[0].color)
+        assertNull(pipes[1].color)
+        assertEquals(4, pipes[1].order)
+    }
+
+    @Test
     fun createSessionSendsThePipeWhenChosenAndOmitsItOtherwise() = runBlocking {
         repeat(2) { server.enqueue(json("""{"session":$sessionJson,"created":true}""")) }
 

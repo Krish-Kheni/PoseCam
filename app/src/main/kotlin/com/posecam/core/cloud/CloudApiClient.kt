@@ -26,6 +26,18 @@ class CloudApiClient(
 ) : CloudApi {
     private val baseUrl: HttpUrl = config.normalizedBaseUrl.toHttpUrl()
 
+    override suspend fun listPipes(): List<PipeInfo> = parsing {
+        val json = get(listOf("v1", "pipes"))
+        json.optJSONArray("pipes").toObjects().map {
+            PipeInfo(
+                id = it.requireString("id"),
+                label = it.requireString("label"),
+                color = it.optStringOrNull("color"),
+                order = it.optInt("order", Int.MAX_VALUE),
+            )
+        }
+    }
+
     override suspend fun createSession(request: CreateSessionRequest): CreateSessionResponse = parsing {
         val body = JSONObject()
             .put("sessionId", request.sessionId)
@@ -176,15 +188,21 @@ class CloudApiClient(
     private fun uploadPath(sessionId: String, tail: String) =
         listOf("v1", "sessions", sessionId, "uploads") + tail.split('/')
 
-    private suspend fun post(path: List<String>, body: JSONObject): JSONObject {
+    private suspend fun post(path: List<String>, body: JSONObject): JSONObject =
+        execute(requestFor(path).post(body.toString().toRequestBody(JSON_MEDIA_TYPE)).build())
+
+    private suspend fun get(path: List<String>): JSONObject = execute(requestFor(path).get().build())
+
+    private suspend fun requestFor(path: List<String>): Request.Builder {
         val url = baseUrl.newBuilder().apply { path.forEach { addPathSegment(it) } }.build()
-        val request = Request.Builder()
+        return Request.Builder()
             .url(url)
             .header("Accept", "application/json")
             .header("X-Device-Id", installationId)
             .apply { authProvider.getToken()?.let { header("Authorization", "Bearer $it") } }
-            .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
-            .build()
+    }
+
+    private suspend fun execute(request: Request): JSONObject {
         val response = try {
             client.newCall(request).await()
         } catch (error: IOException) {
