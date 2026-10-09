@@ -183,4 +183,51 @@ class LocalRetentionManagerTest {
         assertTrue(manager().cleanup().deletedSessions.isEmpty())
         assertTrue(dir.exists())
     }
+
+    // ---- Delete all synced ---------------------------------------------------------------------
+
+    @Test
+    fun deleteAllSyncedRemovesSafeRecordingsWithoutWaitingForTheRetentionPeriod() = runBlocking {
+        val one = syncedSession("s1")
+        val two = syncedSession("s2")
+        enabled = false // the automatic cleanup being off is a different choice from pressing the button
+
+        val overview = manager().syncedOverview()
+        assertEquals(setOf("s1", "s2"), overview.deletableSessions.toSet())
+        assertTrue(overview.deletableBytes > 0)
+        assertEquals(0, overview.keptBack)
+
+        val report = manager().deleteAllSynced()
+
+        assertEquals(setOf("s1", "s2"), report.deletedSessions.toSet())
+        assertFalse(one.exists() || two.exists())
+        assertNull(f.repo.session("s1"))
+    }
+
+    @Test
+    fun deleteAllSyncedKeepsWhatIsStillNeededAndSaysSo() = runBlocking {
+        val safe = syncedSession("s1")
+        val waiting = syncedSession("s2")
+        f.repo.recordPublish("s2", PublishState.PENDING, 0, null) // not on the website yet
+        val unsynced = f.sessionDir("s3")
+        f.queueFinalized(unsynced, f.file(unsynced, "poses.csv", "x"))
+
+        val overview = manager().syncedOverview()
+
+        assertEquals(listOf("s1"), overview.deletableSessions)
+        assertEquals(1, overview.keptBack)
+        assertEquals(listOf("s1"), manager().deleteAllSynced().deletedSessions)
+        assertFalse(safe.exists())
+        assertTrue(waiting.isDirectory)
+        assertTrue(unsynced.isDirectory) // never uploaded: the only copy
+    }
+
+    @Test
+    fun deleteAllSyncedNeverTouchesARecordingBeingWritten() = runBlocking {
+        val dir = syncedSession("s1")
+        active = setOf("s1")
+
+        assertTrue(manager().deleteAllSynced().deletedSessions.isEmpty())
+        assertTrue(dir.isDirectory)
+    }
 }

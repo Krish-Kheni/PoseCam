@@ -284,7 +284,6 @@ class FakeS3Transport : S3Transport {
 }
 
 class FakeScheduler : UploadScheduler {
-    var paused = 0
     var scheduled = 0
     var syncNowCalls = 0
     val syncNowSessions = mutableListOf<String?>()
@@ -292,7 +291,6 @@ class FakeScheduler : UploadScheduler {
     override suspend fun schedule() { scheduled++ }
     override suspend fun syncNow(sessionId: String?) { syncNowCalls++; syncNowSessions += sessionId }
     override suspend fun reschedule() { rescheduled++ }
-    override suspend fun pause() { paused++ }
 }
 
 val NETWORK_DOWN = CloudNetworkException(IOException("Unable to resolve host"))

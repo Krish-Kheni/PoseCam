@@ -34,6 +34,12 @@ data class SessionCloudSummary(
 
     val isSynced: Boolean get() = status == SessionCloudStatus.SYNCED
 
+    /**
+     * Something about this recording failed for good and only a tap will run it again: a file or the cloud session
+     * (shown "Upload failed"), or, once synced, its pipeline export or the upload of it.
+     */
+    val needsRetry: Boolean get() = status == SessionCloudStatus.FAILED || exportState == ExportState.FAILED || exportFilesFailed > 0
+
     /** Synced, and the backend made at least one gallery card from it: it can be found on the website. */
     val isLiveOnWebsite: Boolean get() = isSynced && publishState == PublishState.DONE && publishedSets > 0
 
@@ -59,8 +65,15 @@ data class SessionCloudSummary(
                     SessionCloudStatus.AWAITING_PIPE
                 // Everything is in S3; only the session-level confirmation is outstanding.
                 allVerified && session?.recordingFinal == true -> SessionCloudStatus.VERIFYING
+                // Verifying means every byte of the recording is in and only the last checks remain. A file being
+                // verified while others still wait or transfer is part of uploading: the row must not flip between
+                // "Uploading" and "Verifying" once per file.
                 aggregate != null && aggregate.activeFiles > 0 ->
-                    if (aggregate.awaitingVerification == aggregate.activeFiles) SessionCloudStatus.VERIFYING else SessionCloudStatus.UPLOADING
+                    if (aggregate.awaitingVerification > 0 && aggregate.awaitingVerification == aggregate.totalFiles - aggregate.verifiedFiles) {
+                        SessionCloudStatus.VERIFYING
+                    } else {
+                        SessionCloudStatus.UPLOADING
+                    }
                 else -> SessionCloudStatus.PENDING
             }
             return SessionCloudSummary(

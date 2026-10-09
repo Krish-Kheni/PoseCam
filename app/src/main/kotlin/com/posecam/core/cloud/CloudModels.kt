@@ -125,9 +125,10 @@ class CloudNetworkException(cause: IOException) :
 class CloudHttpException(
     val status: Int,
     val code: String?,
-    message: String,
+    /** The server's own wording, fit to show a person ("Wrong email or password"); [message] adds the status for logs. */
+    val reason: String,
     val details: String? = null,
-) : CloudException("HTTP $status${code?.let { " $it" }.orEmpty()}: $message") {
+) : CloudException("HTTP $status${code?.let { " $it" }.orEmpty()}: $reason") {
     /**
      * Rate limiting, server errors and auth problems are all things a later attempt can fix
      * (auth providers refresh tokens; throttling and outages end). Other 4xx are the
@@ -143,6 +144,7 @@ class CloudHttpException(
         private val TRANSIENT_CODES = setOf("BadDigest", "RequestTimeout", "SlowDown", "InternalError")
 
         const val PATH_NOT_ALLOWED = "PATH_NOT_ALLOWED"
+        const val UNAUTHENTICATED = "UNAUTHENTICATED"
         const val SESSION_NOT_FOUND = "SESSION_NOT_FOUND"
         const val UPLOAD_NOT_FOUND = "UPLOAD_NOT_FOUND"
         const val FILE_NOT_FOUND = "FILE_NOT_FOUND"

@@ -12,7 +12,7 @@ import java.io.File
 import java.security.MessageDigest
 import java.util.zip.ZipFile
 
-/** PoseCam-specific behaviour of the upload processor: frame chunks and "never while recording". */
+/** PoseCam-specific behaviour of the upload processor: frame chunks, and uploading while a take is recorded. */
 class UploadProcessorChunkTest {
     private val f = SyncFixture()
     private val id = "capture-20260917T090000-a3f9c1"
@@ -194,28 +194,13 @@ class UploadProcessorChunkTest {
         assertTrue(f.api.partUrlRequests.isNotEmpty())
     }
 
-    // ---- never while recording ----------------------------------------------------------------
+    // ---- while recording ----------------------------------------------------------------------
 
     @Test
-    fun nothingIsUploadedHashedOrBuiltWhileATakeIsBeingRecorded() = runBlocking {
-        finalizedSession(10, created = false)
+    fun finishedRecordingsKeepUploadingWhileANewTakeIsBeingRecorded() = runBlocking {
+        finalizedSession(10)
         f.recording = true
 
-        assertEquals(QueueRunResult.DONE, f.processor.runQueue())
-
-        assertEquals(0, f.api.calls.size) // not even session creation
-        assertEquals(0, f.s3.puts.size)
-        assertFalse(f.staging.chunkFile(id, "frames-00000.zip").exists()) // nothing was zipped
-        assertTrue(f.repo.uploadsForSession(id).all { it.state == UploadState.PENDING && it.sha256 == null })
-    }
-
-    @Test
-    fun uploadsResumeWhereTheyWereAfterTheTakeEnds() = runBlocking {
-        finalizedSession(10, created = false)
-        f.recording = true
-        f.processor.runQueue()
-
-        f.recording = false
         assertEquals(QueueRunResult.DONE, f.processor.runQueue())
 
         assertTrue(f.repo.uploadsForSession(id).all { it.state == UploadState.VERIFIED })
@@ -223,16 +208,15 @@ class UploadProcessorChunkTest {
     }
 
     @Test
-    fun aTakeStartingMidQueueStopsAtTheNextFileBoundary() = runBlocking {
+    fun aTakeStartingMidQueueDoesNotStopTheUpload() = runBlocking {
         finalizedSession(10)
         var verifies = 0
         f.api.verifyBehavior = { if (++verifies == 2) f.recording = true } // the user presses Record during file 2
 
         assertEquals(QueueRunResult.DONE, f.processor.runQueue())
 
-        val verified = f.repo.uploadsForSession(id).count { it.state == UploadState.VERIFIED }
-        assertEquals("exactly the file in flight finished", 2, verified)
-        assertNull(f.repo.session(id)!!.syncedAt)
+        assertTrue("the whole queue finished", f.repo.uploadsForSession(id).all { it.state == UploadState.VERIFIED })
+        assertNotNull(f.repo.session(id)!!.syncedAt)
     }
 
     @Test

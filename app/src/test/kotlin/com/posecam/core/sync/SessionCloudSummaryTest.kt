@@ -24,8 +24,13 @@ class SessionCloudSummaryTest {
         assertEquals(SessionCloudStatus.UPLOADING, summary.displayStatus(waitingForNetwork = true))
     }
 
+    @Test fun aFileBeingVerifiedWhileOthersAreStillToSendIsStillUploading() {
+        // Without this the row flipped Uploading -> Verifying -> Uploading once per file.
+        assertEquals(SessionCloudStatus.UPLOADING, status(agg(total = 8, verified = 5, active = 1, awaiting = 1), session()))
+    }
+
     @Test fun everythingUploadedButNotConfirmedIsVerifying() {
-        assertEquals(SessionCloudStatus.VERIFYING, status(agg(active = 2, awaiting = 2), session()))
+        assertEquals(SessionCloudStatus.VERIFYING, status(agg(total = 4, verified = 2, active = 2, awaiting = 2), session()))
         assertEquals(SessionCloudStatus.VERIFYING, status(agg(total = 4, verified = 4), session()))
     }
 
@@ -58,5 +63,14 @@ class SessionCloudSummaryTest {
     @Test fun theChosenPipeIsCarriedToTheUi() {
         assertEquals("white", SessionCloudSummary.from(agg(), session()).pipe)
         assertEquals(null, SessionCloudSummary.from(agg(), session(pipe = null, created = false)).pipe)
+    }
+
+    @Test fun failedUploadsAndFailedExportsNeedARetry() {
+        fun summary(a: SessionUploadAggregate?, s: CloudSessionEntity) = SessionCloudSummary.from(a, s)
+        assertEquals(true, summary(agg(failed = 1), session()).needsRetry)
+        assertEquals(true, summary(agg(total = 4, verified = 4), session(synced = 1).copy(exportState = ExportState.FAILED)).needsRetry)
+        assertEquals(true, SessionCloudSummary.from(agg(total = 4, verified = 4), session(synced = 1), SessionExportAggregate("s", 3, 2, 1)).needsRetry)
+        assertEquals(false, summary(agg(active = 1), session()).needsRetry)
+        assertEquals(false, summary(agg(total = 4, verified = 4), session(synced = 1).copy(exportState = ExportState.DONE)).needsRetry)
     }
 }

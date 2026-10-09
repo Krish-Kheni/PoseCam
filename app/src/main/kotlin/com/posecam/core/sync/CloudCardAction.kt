@@ -34,8 +34,8 @@ enum class CloudCardAction {
                 } else {
                     ""
                 }
-                val files = summary?.let { " · ${it.verifiedFiles} of ${it.totalFiles} files" }.orEmpty()
-                "Uploading$percent$files"
+                // One number for the whole recording: how many files that is made of is not the collector's concern.
+                "Uploading$percent"
             }
             status == SessionCloudStatus.VERIFYING -> "Verifying the upload…"
             status == SessionCloudStatus.SYNCED -> "Synced to the cloud"

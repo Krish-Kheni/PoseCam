@@ -27,12 +27,12 @@ data class CloudOverview(
 
     val message: String
         get() = when (kind) {
-            Kind.FAILED -> "Sync failed for ${sessions(failed)}"
-            Kind.SYNCING -> "Syncing ${sessions(syncing)}"
+            Kind.FAILED -> if (failed == 1) "1 upload failed" else "$failed uploads failed"
+            Kind.SYNCING -> "Uploading ${recordings(syncing)}"
             Kind.WAITING -> when {
-                policy == SyncPolicy.MANUAL_ONLY -> "${sessions(waiting).replaceFirstChar { it.uppercase() }} waiting for manual sync"
-                waitingForNetwork -> "Waiting for Wi-Fi · ${sessions(waiting)}"
-                else -> "${sessions(waiting).replaceFirstChar { it.uppercase() }} queued for upload"
+                policy == SyncPolicy.MANUAL_ONLY -> "${recordings(waiting).replaceFirstChar { it.uppercase() }} waiting · manual"
+                waitingForNetwork -> "Waiting for Wi-Fi · ${recordings(waiting)}"
+                else -> "${recordings(waiting).replaceFirstChar { it.uppercase() }} queued"
             }
             Kind.NONE -> if (synced > 0) "All recordings synced" else ""
         }
@@ -40,15 +40,15 @@ data class CloudOverview(
     /** Whether any upload work is outstanding or has failed; false means "nothing left to say". */
     val isBusy: Boolean get() = kind != Kind.NONE
 
-    /** "3 of 9 files · 120 MB / 560 MB" for the progress notification. */
+    /** "120 MB of 560 MB": how much of what is being sent has gone; the bar and percentage say the rest. */
     val progressText: String
-        get() = "$verifiedFiles of $totalFiles files · ${formatBytes(transferredBytes)} / ${formatBytes(totalBytes)}"
+        get() = "${formatBytes(transferredBytes)} of ${formatBytes(totalBytes)}"
 
     /** 0..100, or -1 when the total is unknown (indeterminate). */
     val progressPercent: Int
         get() = if (totalBytes > 0) ((transferredBytes * 100) / totalBytes).toInt().coerceIn(0, 100) else -1
 
-    private fun sessions(count: Int) = if (count == 1) "1 session" else "$count sessions"
+    private fun recordings(count: Int) = if (count == 1) "1 recording" else "$count recordings"
 
     companion object {
         fun formatBytes(bytes: Long): String {

@@ -200,7 +200,7 @@ class PipeChoiceTest {
     @Test
     fun uiTextForTheUnfiledAndFiledStates() {
         val s = summary(SessionCloudStatus.AWAITING_PIPE)
-        assertEquals("Choose a pipe to upload", CloudUiText.rowStatus(s, SyncPolicy.WIFI_ONLY, false))
+        assertEquals("Choose a pipe", CloudUiText.rowStatus(s, SyncPolicy.WIFI_ONLY, false))
         assertEquals("2 need a pipe", CloudUiText.storageSummary(listOf(s, s)))
         assertEquals("Uploading to White pipe (Wi-Fi only).", CloudUiText.pipeChosenMessage(Pipe.WHITE, SyncPolicy.WIFI_ONLY, true))
         assertEquals("Black pipe: waiting for Wi-Fi to upload.", CloudUiText.pipeChosenMessage(Pipe.BLACK, SyncPolicy.WIFI_ONLY, false))

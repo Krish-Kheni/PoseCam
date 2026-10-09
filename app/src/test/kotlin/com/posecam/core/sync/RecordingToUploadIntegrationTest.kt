@@ -127,7 +127,7 @@ class RecordingToUploadIntegrationTest {
     }
 
     @Test
-    fun nothingIsUploadedWhileTheTakeIsRunningAndEverythingAfterwards() = runBlocking {
+    fun anEarlierRecordingUploadsWhileANewTakeIsRunning() = runBlocking {
         // An older, finished recording is waiting in the queue when the user starts a new take.
         val older = f.sessionDir("capture-20260101T000000-000001")
         f.frames(older, 30)
@@ -136,23 +136,24 @@ class RecordingToUploadIntegrationTest {
 
         val recorder = PoseRecorder(f.capturesRoot, encoder, listener = coordinator)
         val dir = recorder.start(emptyMap())
-        until { scheduler.paused >= 1 } // the chain was paused when the take started
+        until { f.repo.session(dir.name) != null }
         recorder.onFrame(1_000_000_000L, "TRACKING", t, q, recorder.captured(1_000_000_000L))
 
-        // A worker that slipped through (or any manual trigger) does nothing while recording.
+        // The take is running, and the backlog is not held back by it.
         assertTrue(com.posecam.core.sync.ActiveRecordingSessions.contains(dir.name))
+        assertEquals(0, scheduler.rescheduled)
         assertEquals(QueueRunResult.DONE, processor.runQueue())
-        assertEquals(0, f.s3.puts.size)
-        assertEquals(0, f.api.calls.size)
+        assertNotNull(f.repo.session(older.name)!!.syncedAt)
+        assertFalse(f.s3.puts.isEmpty())
+        // The take being written is never queued or touched until it is finalized.
+        assertTrue(f.repo.uploadsForSession(dir.name).isEmpty())
 
         recorder.stop()
         until { !ActiveRecordingSessions.contains(dir.name) && f.repo.session(dir.name)?.recordingFinal == true }
-        until { scheduler.scheduled >= 1 } // resumed
+        until { scheduler.scheduled >= 1 } // queued for upload as soon as it is finalized
 
         assertEquals(QueueRunResult.DONE, processor.runQueue())
-        assertNotNull(f.repo.session(older.name)!!.syncedAt)
         assertNotNull(f.repo.session(dir.name)!!.syncedAt)
-        assertFalse(f.s3.puts.isEmpty())
     }
 
     @Test

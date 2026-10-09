@@ -144,6 +144,10 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
     override fun onResume() {
         super.onResume()
         if (fatalError != null) return
+        if (needsFirstSignIn()) {
+            startActivity(Intent(this, AuthActivity::class.java).putExtra(AuthActivity.EXTRA_REQUIRED, true))
+            return
+        }
 
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             // onResume runs again while the dialog is up; a second request would cancel the first.
@@ -169,6 +173,15 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
         resetTrackingGate = true
         idleJumpDetector.reset()
     }
+
+    /**
+     * Cloud upload needs an account, so the very first launch asks for one. After that recording never waits for a
+     * sign-in screen: an expired session is a banner in Recordings, because a collector in the field may be offline.
+     */
+    private fun needsFirstSignIn(): Boolean = runCatching {
+        val sync = CloudSync.get(this)
+        sync.config.enabled && !sync.auth.current().hasEverSignedIn
+    }.getOrDefault(false)
 
     override fun onPause() {
         super.onPause()
@@ -429,7 +442,7 @@ class CaptureActivity : Activity(), GLSurfaceView.Renderer {
 
     private fun cloudEnabled(): Boolean = runCatching { CloudSync.get(this).config.enabled }.getOrDefault(false)
 
-    /** The collector chose a pipe: upload of this take starts (it is paused while recording, resumed by Stop). */
+    /** The collector chose a pipe: this take is queued for upload (earlier recordings were already uploading). */
     private fun onPipeChosen(summary: PoseRecorder.Summary, pipe: Pipe) {
         val message = runCatching {
             val sync = CloudSync.get(this)

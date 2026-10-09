@@ -25,13 +25,6 @@ interface UploadScheduler {
 
     /** The network policy changed: replace any waiting work so it picks up the new constraints. */
     suspend fun reschedule()
-
-    /**
-     * A take started: cancel every upload chain. Cancelling is safe at any instant: rows keep their state,
-     * multipart progress is persisted per part, and a single PUT of a chunk (about 35 MB) restarts from zero.
-     * [schedule] resumes everything after the take.
-     */
-    suspend fun pause()
 }
 
 /**
@@ -91,11 +84,6 @@ class WorkManagerUploadScheduler(
         workManager.enqueueUniqueWork(MANUAL_WORK_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
     }
 
-    override suspend fun pause() {
-        workManager.cancelUniqueWork(UNIQUE_WORK_NAME)
-        workManager.cancelUniqueWork(MANUAL_WORK_NAME)
-    }
-
     override suspend fun reschedule() {
         val networkType = settings.policy.networkType
         if (networkType == null) {
@@ -112,7 +100,8 @@ class WorkManagerUploadScheduler(
                     .setRequiredNetworkType(networkType)
                     .build(),
             )
-            // Temporary failures retry forever with growing delays (WorkManager caps the backoff at 5 h).
+            // Only a crash lands here: temporary failures are retried inside the worker (see UploadWorker), because
+            // WorkManager's backoff grows to hours and a collector would be left waiting or tapping "Sync now".
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, BACKOFF_SECONDS, TimeUnit.SECONDS)
             .addTag(TAG)
             .build()

@@ -6,6 +6,14 @@ import java.util.concurrent.TimeUnit
 
 data class CleanupReport(val deletedSessions: List<String>, val freedBytes: Long)
 
+/** What "Delete all synced" would remove now, and how many synced recordings must stay for the moment. */
+data class SyncedOverview(
+    val deletableSessions: List<String>,
+    val deletableBytes: Long,
+    /** Synced, but still needed: waiting to reach the website, or for their pipeline export to be made and uploaded. */
+    val keptBack: Int,
+)
+
 /** Why a session may not (yet) be removed locally. */
 enum class RetentionBlock {
     NOT_SYNCED,
@@ -75,6 +83,50 @@ class LocalRetentionManager(
                 deleted += session.sessionId
                 freed += bytes
                 CloudLog.i("cleanup", "session" to session.sessionId, "bytes" to bytes, "reason" to if (pastRetention) "retention" else "storage_pressure")
+            }
+        }
+        return CleanupReport(deleted, freed)
+    }
+
+    /**
+     * Every synced recording that is safe to delete right now: the same checks as [cleanup], without waiting for the
+     * retention period. A synced recording still needed (not yet on the website, export not made or not uploaded) is
+     * counted in [SyncedOverview.keptBack] and never offered, so "delete everything synced" cannot lose data.
+     */
+    suspend fun syncedOverview(): SyncedOverview {
+        val deletable = mutableListOf<String>()
+        var bytes = 0L
+        var keptBack = 0
+        for (session in repository.allSessions().filter { it.syncedAt != null }) {
+            val directory = File(session.directoryPath)
+            if (!directory.isDirectory) continue
+            if (blockedReason(session) == null) {
+                deletable += session.sessionId
+                bytes += directory.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+            } else {
+                keptBack++
+            }
+        }
+        return SyncedOverview(deletable, bytes, keptBack)
+    }
+
+    /** The "Delete all synced" button: removes what [syncedOverview] lists, re-checking each recording just before. */
+    suspend fun deleteAllSynced(): CleanupReport {
+        val deleted = mutableListOf<String>()
+        var freed = 0L
+        for (session in repository.allSessions().filter { it.syncedAt != null }.sortedBy { it.syncedAt }) {
+            val directory = File(session.directoryPath)
+            if (!directory.isDirectory) {
+                repository.forgetSession(session.sessionId)
+                continue
+            }
+            if (blockedReason(session) != null) continue
+            val bytes = directory.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+            if (deleteDirectory(directory)) {
+                repository.forgetSession(session.sessionId)
+                deleted += session.sessionId
+                freed += bytes
+                CloudLog.i("cleanup", "session" to session.sessionId, "bytes" to bytes, "reason" to "manual")
             }
         }
         return CleanupReport(deleted, freed)

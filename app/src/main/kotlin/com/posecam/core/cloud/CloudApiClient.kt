@@ -11,7 +11,6 @@ import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import com.posecam.core.sync.UploadThreads
-import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -206,35 +205,12 @@ class CloudApiClient(
             .apply { authProvider.getToken()?.let { header("Authorization", "Bearer $it") } }
     }
 
-    private suspend fun execute(request: Request): JSONObject {
-        val response = try {
-            client.newCall(request).await()
-        } catch (error: IOException) {
-            throw CloudNetworkException(error)
-        }
-        response.use {
-            val text = try {
-                it.body?.string().orEmpty()
-            } catch (error: IOException) {
-                throw CloudNetworkException(error)
-            }
-            if (!it.isSuccessful) throw parseError(it.code, text)
-            return try {
-                JSONObject(text)
-            } catch (error: JSONException) {
-                throw malformed("response is not JSON")
-            }
-        }
-    }
-
-    private fun parseError(status: Int, text: String): CloudHttpException {
-        val error = runCatching { JSONObject(text).optJSONObject("error") }.getOrNull()
-        return CloudHttpException(
-            status = status,
-            code = error?.optStringOrNull("code"),
-            message = error?.optStringOrNull("message") ?: "request failed",
-            details = error?.optJSONObject("details")?.toString(),
-        )
+    private suspend fun execute(request: Request): JSONObject = try {
+        client.executeJson(request)
+    } catch (error: CloudHttpException) {
+        // The token was refused: the provider forgets it, so nothing is sent with a dead token again.
+        if (error.status == 401) authProvider.onUnauthorized()
+        throw error
     }
 
     /** A response with an unexpected shape is a backend problem, never a crash in the worker. */
@@ -288,9 +264,6 @@ class CloudApiClient(
             .build()
     }
 }
-
-private fun JSONObject.optStringOrNull(name: String): String? =
-    if (isNull(name)) null else optString(name).takeIf { it.isNotEmpty() }
 
 private fun JSONObject?.toStringMap(): Map<String, String> {
     if (this == null) return emptyMap()

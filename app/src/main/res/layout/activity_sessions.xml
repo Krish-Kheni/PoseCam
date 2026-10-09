@@ -9,31 +9,62 @@
         android:id="@+id/header"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:alpha="0.65"
         android:ellipsize="end"
-        android:fontFamily="monospace"
         android:maxLines="1"
-        android:paddingBottom="12dp"
+        android:paddingBottom="8dp"
         android:textSize="13sp" />
+
+    <!-- Bulk actions: each appears only when it has something to do. -->
+    <LinearLayout
+        android:id="@+id/bulkActions"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="4dp"
+        android:orientation="horizontal"
+        android:visibility="gone">
+
+        <Button
+            android:id="@+id/retryAll"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:textAllCaps="false"
+            android:textColor="#C62828"
+            android:textSize="13sp"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/deleteSynced"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:textAllCaps="false"
+            android:textSize="13sp"
+            android:visibility="gone" />
+    </LinearLayout>
 
     <!-- Cloud upload banner (hidden unless a backend URL is configured). Settings: gear in the header. -->
     <LinearLayout
         android:id="@+id/cloudBanner"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="12dp"
-        android:layout_marginTop="12dp"
+        android:layout_marginBottom="8dp"
+        android:layout_marginTop="4dp"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingBottom="8dp"
+        android:paddingBottom="4dp"
         android:paddingEnd="8dp"
         android:paddingStart="14dp"
-        android:paddingTop="8dp"
+        android:paddingTop="4dp"
         android:visibility="gone">
 
         <ImageView
             android:id="@+id/cloudBannerIcon"
-            android:layout_width="28dp"
-            android:layout_height="28dp"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
             android:contentDescription="@null" />
 
         <LinearLayout
@@ -48,7 +79,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:textColor="#212121"
-                android:textSize="15sp"
+                android:textSize="14sp"
                 android:textStyle="bold" />
 
             <TextView
@@ -83,7 +114,9 @@
     <ListView
         android:id="@+id/list"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent"
+        android:divider="#1F000000"
+        android:dividerHeight="1px" />
 
     <TextView
         android:id="@+id/empty"

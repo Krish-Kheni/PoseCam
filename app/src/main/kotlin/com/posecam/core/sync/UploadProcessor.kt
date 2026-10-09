@@ -53,7 +53,10 @@ class UploadProcessor(
     private val appVersion: String,
     /** Builds the file for rows whose source is not a plain file (frame chunks). */
     private val materializer: UploadMaterializer = UploadMaterializer.Plain,
-    /** True while a take is being recorded: nothing is hashed, built or sent then (see [UploadCoordinator]). */
+    /**
+     * True while a take is being recorded. Uploads of finished recordings carry on during a take (on background-priority
+     * threads); only the pipeline export, which re-encodes video, waits for Stop (see [PipelineExportStage]).
+     */
     private val isRecording: () -> Boolean = { ActiveRecordingSessions.snapshot().isNotEmpty() },
     /** How often the in-flight byte count of a single PUT is persisted for the progress display. */
     private val progressIntervalMs: Long = 1_000,
@@ -87,12 +90,13 @@ class UploadProcessor(
     }
 
     private val runLock = Mutex()
+
+    /** True while a pass over the queue is in progress (not while a worker waits between retries). */
+    val isRunning: Boolean get() = runLock.isLocked
+
     private var syncedThisRun = 0
 
     private suspend fun drainQueue(onlySessionId: String?): QueueRunResult {
-        // Recording wins: PoseCam's documented failure under load is dropped images, so no upload work at all
-        // (hashing, zipping, TLS, radio) runs while a take is in progress. The next run starts after Stop.
-        if (isRecording()) return QueueRunResult.DONE
         var needsRetry = false
 
         when (createPendingSessions(onlySessionId)) {
@@ -100,26 +104,30 @@ class UploadProcessor(
             QueueRunResult.DONE -> Unit
         }
 
-        // The export first: its files join the queue (at the front) before the first file is picked below. It writes
-        // only to staging, stops within a frame when a take starts, and can never fail the session it belongs to.
-        exportStage?.runPending(onlySessionId)
-        if (isRecording()) return QueueRunResult.DONE
-
         // One failing file must not starve the rest, so it is skipped for the remainder of this run
-        // and retried by the next (backed-off) run. A dead network aborts the run outright.
+        // and retried by the next run. A dead network aborts the run outright.
         val skipped = mutableSetOf<Long>()
-        while (true) {
-            if (isRecording()) return QueueRunResult.DONE
-            val next = repository.runnable().firstOrNull { it.id !in skipped && (onlySessionId == null || it.sessionId == onlySessionId) } ?: break
-            when (val outcome = processFile(next)) {
-                FileOutcome.Done, FileOutcome.Failed -> Unit
-                is FileOutcome.Retry -> {
-                    skipped += next.id
-                    needsRetry = true
-                    if (outcome.networkDown) return QueueRunResult.RETRY
+        // Exports are made before the files they produce are sent, and again after a take ends: a recording that
+        // was filed during a take could not be exported then, and must not wait for the next run to be.
+        var passes = 0
+        do {
+            // The export first: its files join the queue (at the front) before the first file is picked below. It
+            // writes only to staging, stops within a frame when a take starts, and can never fail the session it
+            // belongs to. While recording it does nothing, and uploads simply carry on.
+            exportStage?.runPending(onlySessionId)
+            while (true) {
+                val next = repository.runnable().firstOrNull { it.id !in skipped && (onlySessionId == null || it.sessionId == onlySessionId) } ?: break
+                when (val outcome = processFile(next)) {
+                    FileOutcome.Done, FileOutcome.Failed -> Unit
+                    is FileOutcome.Retry -> {
+                        skipped += next.id
+                        needsRetry = true
+                        if (outcome.networkDown) return QueueRunResult.RETRY
+                    }
                 }
             }
-        }
+            passes++
+        } while (passes < MAX_EXPORT_PASSES && !isRecording() && exportStage?.hasWork() == true)
 
         if (completeFinishedSessions(onlySessionId) == QueueRunResult.RETRY) needsRetry = true
         return if (needsRetry) QueueRunResult.RETRY else QueueRunResult.DONE
@@ -389,5 +397,7 @@ class UploadProcessor(
 
     private companion object {
         const val MAX_VERIFY_FAILURES = 3
+        /** Export-then-upload rounds in one run; each round either exports everything pending or a take started. */
+        const val MAX_EXPORT_PASSES = 3
     }
 }

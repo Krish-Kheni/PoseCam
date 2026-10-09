@@ -9,7 +9,8 @@
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- Cloud upload. Recording itself never needs the network: files are uploaded to S3 in the
-         background by WorkManager after a take is finished, and only when a backend URL is configured. -->
+         background by WorkManager (also while the next take is recorded), only when a backend URL is configured and
+         a collector is signed in. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Long uploads run in WorkManager's foreground service (with a progress notification). -->
@@ -41,6 +42,27 @@
             android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
+
+        <!-- No configChanges restart: a rotation mid-request would drop the sign-in answer. -->
+        <activity
+            android:name=".AuthActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:exported="false"
+            android:label="Sign in"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".UploadStatsActivity"
+            android:exported="false"
+            android:label="My uploads"
+            android:theme="@android:style/Theme.Material.Light" />
+
+        <activity
+            android:name=".DayUploadsActivity"
+            android:exported="false"
+            android:label="Uploads"
+            android:theme="@android:style/Theme.Material.Light" />
 
         <activity
             android:name=".SessionsActivity"

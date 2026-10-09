@@ -26,9 +26,19 @@ White / Black / Black/White pipe tapped ───choosePipe────>      �
 
 * The **recorder only reports two facts**: a session started, a session was finalized. The listener never blocks and
   never throws into the recorder (`PoseRecorder.notifyListener` swallows everything).
-* **Never while recording.** Starting a take pauses the upload chain; the processor and the worker also refuse to run while
-  any take is active; Stop resumes it. PoseCam's known failure under load is dropped images, so no hashing, zipping, TLS
-  or radio work happens during a take.
+* **Uploads carry on while a take is recorded.** A collector who films back to back never waits for the previous take to
+  drain, and nothing is paused and restarted around a take (that restart was slow and sometimes needed a manual "Sync
+  now"). The take being recorded is not queued until it is finalized; upload work (hashing, zipping chunks, TLS) runs on
+  background-priority threads; the pipeline export, which re-encodes video, is the one job that waits for Stop, and runs
+  in the same pass right after it. Uploading shares the phone's CPU, radio and heat with ARCore, so **check on a real phone**
+  that `images.dropped` / `queue_full` in `manifest.json` stay at 0 for a take recorded during a large upload.
+* **Temporary failures retry within a minute, not hours.** The upload worker retries itself after 15 s, doubling to at
+  most 1 min, instead of handing the failure to WorkManager's backoff (which grows to 5 h). Losing the network stops the
+  worker and WorkManager restarts it the moment the network returns. A 15-minute watchdog queues a worker if recordings are
+  waiting and none is queued (after a process kill, for instance). While the app is on screen it also starts the queue
+  itself every 30 s if recordings are waiting, nothing is uploading and the network policy is met by the app's own
+  reading: WorkManager can hold a job back on its own idea of the network ("N sessions queued" with nothing happening
+  until the app was killed and reopened). A queued recording whose last attempt failed says why in its row.
 * The **queue is the source of truth** (Room, unique on `(sessionId, relativePath)`), so enqueueing and recovery are
   idempotent. Temporary failures retry forever with WorkManager backoff; only permanent errors become `FAILED`.
 * **Verified, not assumed.** A file is `VERIFIED` only after the backend checked the S3 object (size and SHA-256); a 200
@@ -134,8 +144,8 @@ export/<stem>/posecam_export.json
   |---|---|---|
   | off protocol (not 640×480, 30 fps, auto focus) | `Synced — no pipeline export (off protocol)` | no |
   | killed take, no clean stretch, frames missing | `Synced — no pipeline export (cannot be exported)` | no |
-  | crashed (storage, encoder) | `Synced — pipeline export failed, tap to retry` | only by **Retry pipeline export** |
-  | an export file refused/failed to upload | `Synced — pipeline export upload failed, tap to retry` | only by retry |
+  | crashed (storage, encoder) | `Synced — pipeline export failed` (with a Retry button on the row) | only by **Retry pipeline export** |
+  | an export file refused/failed to upload | `Synced — pipeline export upload failed` (with a Retry button on the row) | only by retry |
   | no rotation chosen yet | `Synced — set the video rotation to make the pipeline export` | when it is chosen |
 
   Tapping such a recording offers **Why no pipeline export?**, which shows the exporter's own message (e.g. "recorded at
@@ -148,7 +158,7 @@ export/<stem>/posecam_export.json
 ## Statuses and what a collector sees
 
 * Recordings screen: a second line per recording (`On this phone only`, `Waiting for Wi-Fi`, `Queued for upload`,
-  `Uploading 45% · 3 of 9 files`, `Verifying…`, `Synced`, `Upload failed, tap to retry`), a banner with progress and a
+  `Uploading 45% · 3 of 9 files`, `Verifying…`, `Synced`, `Upload failed`), a banner with progress and a
   `Sync now` / `Retry` button, `N synced, M waiting` in the storage header, and a **Cloud sync settings** button
   (upload over Wi-Fi only / any network / manual; the video rotation for pipeline exports; delete synced recordings after N days or never; ask before using mobile data).
 * With cloud upload on, **Share raw recording**, **Save raw zip to Downloads** and the export dialog's **Share export** / **Save export to
@@ -206,11 +216,23 @@ The server returns `x-amz-checksum-sha256` as a signed *header* because R2 ignor
 "verified" would shrink to a size check). If a PUT ever fails with `SignatureDoesNotMatch`, do not drop the header: that silently
 disables integrity checking.
 
-### Security: before any field use
+### Accounts
 
-The upload endpoints have no authentication (like the rest of the labeling-server API): anyone who has the URL can mint presigned upload URLs into the bucket. Do not
-put a release URL in a build collectors use until device authentication exists (`AuthProvider` is the seam; nothing else
-changes). The frames show whatever the collector's camera saw; keep the bucket private and tell collectors what is uploaded.
+Collectors sign up or sign in with **email and password** (`AuthActivity`), once, on first launch. Recording never needs it;
+uploading does. The app stores only the token the server issues (90 days; `AuthStore`, private preferences), never the
+password. An expired or refused token does not block recording: Recordings shows a "Sign in" banner and uploads wait.
+Signing out (in **Recordings → My uploads**) keeps recordings and the queue; recordings that had not finished uploading go
+to whichever account signs in next, so sign out only when the queue is empty.
+
+* Server: `POST /v1/auth/register`, `POST /v1/auth/login`, `GET /v1/me/stats`; set `POSECAM_UPLOAD_AUTH_MODE=user` and
+  `POSECAM_AUTH_SECRET` on the labeling-server so every upload route needs a token and a session belongs to its creator
+  (see the labelnow README, "PoseCam cloud upload"). With the default mode `none` the app still signs in, but the server
+  does not yet enforce it. **Set `user` before putting a release URL in a build collectors use.**
+* **My uploads** (Recordings menu): total recordings uploaded and a day-by-day list, counted by the server when a recording is
+  fully uploaded, so deleting recordings from the phone never lowers it. The last answer is cached for offline viewing.
+* **Delete all synced** (Recordings): one tap removes every synced recording that is safe to remove (published, export uploaded,
+  every file verified), without waiting out the retention period. Synced recordings still needed are kept and counted in the
+  confirmation.
 
 ## Testing
 
@@ -233,7 +255,7 @@ changes). The frames show whatever the collector's camera saw; keep the bucket p
 * Exports are made only inside an upload pass, so on the default Wi-Fi-only policy they wait for Wi-Fi even though making them needs
   no network.
 * After a hard kill, an in-flight PUT may already have landed, so a re-send can leave two identical S3 versions of one key.
-* Authentication is not implemented (see Security).
+* Accounts are email+password with stateless 90-day tokens: no password reset, no token revocation, no delete-account.
 * The pipe dialog itself is verified with Robolectric, and the pipe choice through the Recordings screen on an emulator; the dialog
   has not been seen on a phone after a real take.
 * The upload state machine, queue and UI are verified on an emulator and in unit tests; a recording cannot be made on the emulator

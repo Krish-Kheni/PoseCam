@@ -15,27 +15,27 @@ class CloudUiTextTest {
     @Test fun everyStatusHasAHumanLine() {
         assertEquals("On this phone only", row(null))
         assertEquals("On this phone only", row(summary(SessionCloudStatus.LOCAL_ONLY)))
-        assertEquals("Queued for upload", row(summary(SessionCloudStatus.PENDING)))
-        assertEquals("Verifying…", row(summary(SessionCloudStatus.VERIFYING)))
-        assertEquals("Uploaded — publishing to website…", row(summary(SessionCloudStatus.SYNCED)))
-        assertEquals("Upload failed, tap to retry", row(summary(SessionCloudStatus.FAILED)))
+        assertEquals("Queued", row(summary(SessionCloudStatus.PENDING)))
+        assertEquals("Verifying", row(summary(SessionCloudStatus.VERIFYING)))
+        assertEquals("Uploaded · publishing…", row(summary(SessionCloudStatus.SYNCED)))
+        assertEquals("Upload failed", row(summary(SessionCloudStatus.FAILED)))
     }
 
     private fun synced(state: PublishState, sets: Int = 0, note: String? = null) =
         summary(SessionCloudStatus.SYNCED).copy(publishState = state, publishedSets = sets, publishNote = note)
 
     @Test fun syncedReadsDoneOnlyOnceTheBackendPublishedIt() {
-        assertEquals("Uploaded — publishing to website…", row(synced(PublishState.PENDING)))
-        assertEquals("Done — live on website", row(synced(PublishState.DONE, sets = 2)))
+        assertEquals("Uploaded · publishing…", row(synced(PublishState.PENDING)))
+        assertEquals("Done · live", row(synced(PublishState.DONE, sets = 2)))
     }
 
     @Test fun aPublishWithNoSetsIsNotDoneYetForARecordingThatWasExported() {
-        assertEquals("Uploaded — publishing to website…", row(synced(PublishState.DONE, sets = 0)))
+        assertEquals("Uploaded · publishing…", row(synced(PublishState.DONE, sets = 0)))
     }
 
     @Test fun aFailedPublishSaysWhy() {
-        assertEquals("Publishing failed — ffmpeg exited 1", row(synced(PublishState.FAILED, note = "ffmpeg exited 1")))
-        assertEquals("Publishing failed — unknown error", row(synced(PublishState.FAILED)))
+        assertEquals("Publish failed", row(synced(PublishState.FAILED, note = "ffmpeg exited 1")))
+        assertEquals("Publish failed", row(synced(PublishState.FAILED)))
         assertEquals("ffmpeg exited 1", CloudUiText.publishFailedDetail(synced(PublishState.FAILED, note = "ffmpeg exited 1"))!!.substringAfterLast("\n"))
         assertNull(CloudUiText.publishFailedDetail(synced(PublishState.DONE, sets = 1)))
     }
@@ -46,7 +46,7 @@ class CloudUiTextTest {
 
     @Test fun exportProblemsStillComeBeforeThePublishLine() {
         val offProtocol = synced(PublishState.DONE, sets = 0).copy(exportState = ExportState.OFF_PROTOCOL)
-        assertEquals("Synced — no pipeline export (off protocol)", row(offProtocol))
+        assertEquals("Synced · no export (off protocol)", row(offProtocol))
     }
 
     @Test fun deleteWarningSaysWhetherItIsOnTheWebsite() {
@@ -63,7 +63,32 @@ class CloudUiTextTest {
     }
 
     @Test fun uploadingShowsPercentAndFiles() {
-        assertEquals("Uploading 45% · 3 of 9 files", row(summary(SessionCloudStatus.UPLOADING, done = 45, total = 100, verified = 3, files = 9)))
+        assertEquals("Uploading 45%", row(summary(SessionCloudStatus.UPLOADING, done = 45, total = 100, verified = 3, files = 9)))
+    }
+
+    @Test fun aQueuedRecordingSaysWhyItIsNotMoving() {
+        fun queued(error: String?) = row(SessionCloudSummary("capture-x", SessionCloudStatus.PENDING, 4, 0, 100, 0, error))
+        assertEquals("Queued", queued(null))
+        assertEquals("Queued · no connection", queued("Network: Unable to resolve host"))
+        assertEquals("Queued · retry: HTTP 500 INTERNAL: boom", queued("HTTP 500 INTERNAL: boom"))
+    }
+
+    @Test fun theChosenPipeIsShownWhileTheRecordingIsOnItsWay() {
+        fun withPipe(status: SessionCloudStatus, waiting: Boolean = false) =
+            CloudUiText.rowStatus(summary(status, done = 45, total = 100), SyncPolicy.WIFI_ONLY, waiting, true, "White pipe")
+        assertEquals("White pipe · Uploading 45%", withPipe(SessionCloudStatus.UPLOADING))
+        assertEquals("White pipe · Queued", withPipe(SessionCloudStatus.PENDING))
+        assertEquals("White pipe · Waiting for Wi-Fi", withPipe(SessionCloudStatus.PENDING, waiting = true))
+        assertEquals("White pipe · Verifying", withPipe(SessionCloudStatus.VERIFYING))
+        assertEquals("White pipe · Upload failed", withPipe(SessionCloudStatus.FAILED))
+    }
+
+    @Test fun noPipeLabelMeansTheLineIsUnchangedAndSyncedRowsStayShort() {
+        assertEquals("Uploading 45%", row(summary(SessionCloudStatus.UPLOADING, done = 45, total = 100)))
+        assertEquals(
+            "Choose a pipe",
+            CloudUiText.rowStatus(summary(SessionCloudStatus.AWAITING_PIPE), SyncPolicy.WIFI_ONLY, false, true, "White pipe"),
+        )
     }
 
     @Test fun onlyStartAndRetryHaveAMenuAction() {

@@ -88,9 +88,9 @@ class PipelineExportUploadTest {
         assertEquals(ExportState.DONE, f.repo.session(id)!!.exportState)
         assertEquals(listOf(90), exportCalls)
         // Uploaded is not the website: "Done" waits for the backend to say it published the recording.
-        assertEquals("Uploaded — publishing to website…", CloudUiText.rowStatus(summary(), SyncPolicy.WIFI_ONLY, false))
+        assertEquals("Uploaded · publishing…", CloudUiText.rowStatus(summary(), SyncPolicy.WIFI_ONLY, false))
         f.repo.recordPublish(id, PublishState.DONE, 2, null)
-        assertEquals("Done — live on website", CloudUiText.rowStatus(summary(), SyncPolicy.WIFI_ONLY, false))
+        assertEquals("Done · live", CloudUiText.rowStatus(summary(), SyncPolicy.WIFI_ONLY, false))
     }
 
     @Test
@@ -167,7 +167,7 @@ class PipelineExportUploadTest {
         assertEquals(ExportState.PENDING, f.repo.session(id)!!.exportState)
         assertNotNull("the raw upload carries on", f.repo.session(id)!!.syncedAt)
         assertEquals(
-            "Synced — set the video rotation to make the pipeline export",
+            "Synced · set video rotation",
             CloudUiText.rowStatus(summary(), SyncPolicy.WIFI_ONLY, false, exportRotationSet = false),
         )
 
@@ -226,7 +226,7 @@ class PipelineExportUploadTest {
         assertEquals(SessionCloudStatus.SYNCED, summary().status)
         assertTrue(f.repo.uploadsForSession(id).none { it.kind == UploadSourceKind.EXPORT })
         assertEquals(ExportState.OFF_PROTOCOL, f.repo.session(id)!!.exportState)
-        assertEquals("Synced — no pipeline export (off protocol)", CloudUiText.rowStatus(summary(), SyncPolicy.WIFI_ONLY, false))
+        assertEquals("Synced · no export (off protocol)", CloudUiText.rowStatus(summary(), SyncPolicy.WIFI_ONLY, false))
         assertTrue(CloudUiText.missingExportDetail(summary())!!.contains("640x360"))
         assertFalse("not retried on every run", stage.hasWork())
         assertFalse(f.staging.exportRoot(id).exists())
@@ -243,7 +243,7 @@ class PipelineExportUploadTest {
 
         assertEquals(1, exportCalls.size)
         assertEquals(ExportState.NOT_EXPORTABLE, f.repo.session(id)!!.exportState)
-        assertEquals("Synced — no pipeline export (cannot be exported)", CloudUiText.rowStatus(summary(), SyncPolicy.WIFI_ONLY, false))
+        assertEquals("Synced · no export", CloudUiText.rowStatus(summary(), SyncPolicy.WIFI_ONLY, false))
         assertNotNull(f.repo.session(id)!!.syncedAt)
     }
 
@@ -262,7 +262,7 @@ class PipelineExportUploadTest {
         assertNotNull(f.repo.session(id)!!.syncedAt)
         assertEquals(ExportState.FAILED, f.repo.session(id)!!.exportState)
         assertEquals("No space left on device", f.repo.session(id)!!.exportNote)
-        assertEquals("Synced — pipeline export failed, tap to retry", CloudUiText.rowStatus(summary(), SyncPolicy.WIFI_ONLY, false))
+        assertEquals("Synced · export failed", CloudUiText.rowStatus(summary(), SyncPolicy.WIFI_ONLY, false))
         assertFalse("a crash is not retried on its own", stage.hasWork())
 
         fail = false
@@ -286,7 +286,7 @@ class PipelineExportUploadTest {
         val failed = f.repo.uploadsForSession(id).single { it.state == UploadState.FAILED }
         assertEquals("export/$stem1/RGB_$stem1.mp4", failed.relativePath)
         assertEquals(SessionCloudStatus.SYNCED, summary().status)
-        assertEquals("Synced — pipeline export upload failed, tap to retry", CloudUiText.rowStatus(summary(), SyncPolicy.WIFI_ONLY, false))
+        assertEquals("Synced · export upload failed", CloudUiText.rowStatus(summary(), SyncPolicy.WIFI_ONLY, false))
     }
 
     @Test
@@ -350,6 +350,20 @@ class PipelineExportUploadTest {
         assertTrue(exportCalls.isEmpty())
     }
 
+    @Test
+    fun aRecordingFiledDuringATakeIsExportedInTheSameRunOnceTheTakeEnds() = runBlocking {
+        filedRecording()
+        f.repo.markSessionCreated(id)
+        f.recording = true
+        // The raw upload carries on during the take; the export waits. Stop is pressed while the last file goes up.
+        f.api.verifyBehavior = { f.recording = false }
+
+        assertEquals(QueueRunResult.DONE, processor.runQueue())
+
+        assertEquals(ExportState.DONE, f.repo.session(id)!!.exportState)
+        assertTrue(f.repo.uploadsForSession(id).filter { it.kind == UploadSourceKind.EXPORT }.all { it.state == UploadState.VERIFIED })
+    }
+
     // ---- staging lost --------------------------------------------------------------------------
 
     @Test
@@ -359,9 +373,8 @@ class PipelineExportUploadTest {
         stage.runPending()
         f.staging.exportRoot(id).deleteRecursively() // storage cleared before the export was uploaded
 
+        // The run notices the loss, reports a retry, and already makes the export again in the same run.
         assertEquals(QueueRunResult.RETRY, processor.runQueue())
-        assertEquals(ExportState.PENDING, f.repo.session(id)!!.exportState)
-        assertTrue(f.repo.uploadsForSession(id).none { it.kind == UploadSourceKind.EXPORT })
 
         assertEquals(QueueRunResult.DONE, processor.runQueue())
         assertEquals(6, f.repo.uploadsForSession(id).count { it.kind == UploadSourceKind.EXPORT && it.state == UploadState.VERIFIED })

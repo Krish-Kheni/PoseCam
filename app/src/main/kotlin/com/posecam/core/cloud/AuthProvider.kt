@@ -2,9 +2,8 @@ package com.posecam.core.cloud
 
 /**
  * Supplies the bearer token attached to backend API calls. This is the single seam for
- * device authentication: swapping [NoAuthProvider] for a real provider (e.g. a
- * `DeviceAuthProvider` that signs in the device and refreshes tokens) requires no change to
- * the upload worker, the repository or any recording code -- [CloudApiClient] simply adds
+ * authentication: [UserAuthProvider] hands over the signed-in collector's token, and nothing else (the upload worker,
+ * the repository, recording) knows about it -- [CloudApiClient] simply adds
  * `Authorization: Bearer <token>` whenever a token is returned.
  *
  * The token is only ever sent to the backend API. It is never sent to S3: presigned URLs
@@ -12,4 +11,7 @@ package com.posecam.core.cloud
  */
 interface AuthProvider {
     suspend fun getToken(): String?
+
+    /** The backend answered 401: the token is expired or revoked and must not be sent again. */
+    fun onUnauthorized() = Unit
 }

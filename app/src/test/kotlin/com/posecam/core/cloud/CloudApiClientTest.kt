@@ -19,7 +19,7 @@ class CloudApiClientTest {
     @Before fun setUp() { server = MockWebServer().also { it.start() } }
     @After fun tearDown() { runCatching { server.shutdown() } }
 
-    private fun client(auth: AuthProvider = NoAuthProvider()) =
+    private fun client(auth: AuthProvider = object : AuthProvider { override suspend fun getToken(): String? = null }) =
         CloudApiClient(CloudConfig(baseUrl = server.url("/").toString().trimEnd('/')), auth, "install-123")
 
     private fun json(body: String, code: Int = 200) = MockResponse().setResponseCode(code).setBody(body)

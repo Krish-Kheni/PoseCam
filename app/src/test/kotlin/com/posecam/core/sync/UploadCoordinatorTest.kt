@@ -25,17 +25,18 @@ class UploadCoordinatorTest {
     private suspend fun until(condition: suspend () -> Boolean) = withTimeout(5_000) { while (!condition()) delay(10) }
 
     @Test
-    fun startingATakeMarksItActiveAndPausesTheUploadChain() = runBlocking {
+    fun startingATakeMarksItActiveAndLeavesTheUploadChainRunning() = runBlocking {
         val dir = f.sessionDir(id, status = "recording")
 
         coordinator.onSessionStarted(id, dir)
 
         // Synchronous: the processor consults this set before every file, even before the consumer ran.
         assertTrue(ActiveRecordingSessions.contains(id))
-        until { scheduler.paused == 1 && f.repo.session(id) != null }
+        until { f.repo.session(id) != null }
         assertFalse(f.repo.session(id)!!.recordingFinal)
         assertEquals(0, f.repo.uploadsForSession(id).size) // nothing is queued until the take is over
         assertEquals(0, scheduler.scheduled)
+        assertEquals(0, scheduler.rescheduled) // uploads of earlier recordings are not touched
     }
 
     @Test

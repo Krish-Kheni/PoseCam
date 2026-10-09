@@ -291,7 +291,7 @@ class UploadRepository(
     /** User action: put permanently failed files (of one session, or all) back in the queue. */
     suspend fun retryFailed(sessionId: String? = null): Int = transactor.run {
         val failed = dao.failedUploads(sessionId)
-        failed.forEach { resetToPending(it.id, "Retry requested") }
+        failed.forEach { resetToPending(it.id, "") }
         // A session the backend refused outright gets another chance as well.
         dao.allSessions()
             .filter { it.permanentFailure && (sessionId == null || it.sessionId == sessionId) }

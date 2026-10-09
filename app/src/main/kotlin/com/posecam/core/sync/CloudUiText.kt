@@ -9,19 +9,36 @@ object CloudUiText {
         waitingForNetwork: Boolean,
         /** False until the collector has chosen the export rotation: exports wait for it. */
         exportRotationSet: Boolean = true,
+        /** The name of the pipe the recording was filed under; shown while it is on its way to the cloud. */
+        pipeLabel: String? = null,
     ): String {
         if (summary == null) return "On this phone only"
-        return when (val status = summary.displayStatus(waitingForNetwork)) {
+        val status = summary.displayStatus(waitingForNetwork)
+        val line = statusLine(status, summary, policy, exportRotationSet)
+        val inFlight = status == SessionCloudStatus.WAITING_FOR_WIFI || status == SessionCloudStatus.PENDING ||
+            status == SessionCloudStatus.UPLOADING || status == SessionCloudStatus.VERIFYING || status == SessionCloudStatus.FAILED
+        return if (inFlight && !pipeLabel.isNullOrBlank()) "$pipeLabel · $line" else line
+    }
+
+    private fun statusLine(status: SessionCloudStatus, summary: SessionCloudSummary, policy: SyncPolicy, exportRotationSet: Boolean): String {
+        return when (status) {
             SessionCloudStatus.LOCAL_ONLY -> "On this phone only"
-            SessionCloudStatus.AWAITING_PIPE -> "Choose a pipe to upload"
+            SessionCloudStatus.AWAITING_PIPE -> "Choose a pipe"
             SessionCloudStatus.WAITING_FOR_WIFI -> "Waiting for Wi-Fi"
             SessionCloudStatus.PENDING ->
-                if (policy == SyncPolicy.MANUAL_ONLY) "Not uploaded (manual mode)" else "Queued for upload"
+                if (policy == SyncPolicy.MANUAL_ONLY) "Not uploaded (manual mode)" else "Queued" + retryNote(summary.lastError)
             SessionCloudStatus.UPLOADING -> CloudCardAction.infoMessage(status, summary, recordingInProgress = false)
-            SessionCloudStatus.VERIFYING -> "Verifying…"
+            SessionCloudStatus.VERIFYING -> "Verifying"
             SessionCloudStatus.SYNCED -> syncedLine(summary, exportRotationSet)
-            SessionCloudStatus.FAILED -> "Upload failed, tap to retry"
+            SessionCloudStatus.FAILED -> "Upload failed"
         }
+    }
+
+    /** Why a queued recording is not moving, when the last attempt failed: otherwise "Queued" would say nothing. */
+    private fun retryNote(error: String?): String = when {
+        error.isNullOrBlank() -> ""
+        error.startsWith("Network:") -> " · no connection"
+        else -> " · retry: ${error.take(40)}"
     }
 
     /**
@@ -29,13 +46,13 @@ object CloudUiText {
      * in LabelNow, so a bare "Synced" would hide exactly the thing the collector needs to know.
      */
     fun syncedLine(summary: SessionCloudSummary, exportRotationSet: Boolean = true): String = when {
-        summary.exportState == ExportState.OFF_PROTOCOL -> "Synced — no pipeline export (off protocol)"
-        summary.exportState == ExportState.NOT_EXPORTABLE -> "Synced — no pipeline export (cannot be exported)"
-        summary.exportState == ExportState.FAILED -> "Synced — pipeline export failed, tap to retry"
+        summary.exportState == ExportState.OFF_PROTOCOL -> "Synced · no export (off protocol)"
+        summary.exportState == ExportState.NOT_EXPORTABLE -> "Synced · no export"
+        summary.exportState == ExportState.FAILED -> "Synced · export failed"
         summary.exportState == ExportState.PENDING ->
-            if (exportRotationSet) "Synced — making the pipeline export…" else "Synced — set the video rotation to make the pipeline export"
-        summary.exportFilesFailed > 0 -> "Synced — pipeline export upload failed, tap to retry"
-        summary.exportFilesOpen > 0 -> "Synced — uploading the pipeline export…"
+            if (exportRotationSet) "Synced · exporting…" else "Synced · set video rotation"
+        summary.exportFilesFailed > 0 -> "Synced · export upload failed"
+        summary.exportFilesOpen > 0 -> "Synced · uploading export…"
         else -> publishLine(summary)
     }
 
@@ -45,10 +62,10 @@ object CloudUiText {
      */
     private fun publishLine(summary: SessionCloudSummary): String = when (summary.publishState) {
         PublishState.UNSUPPORTED -> "Synced"
-        PublishState.FAILED -> "Publishing failed — ${summary.publishNote ?: "unknown error"}"
+        PublishState.FAILED -> "Publish failed"
         PublishState.DONE ->
-            if (summary.publishedSets > 0) "Done — live on website" else "Uploaded — publishing to website…"
-        PublishState.PENDING -> "Uploaded — publishing to website…"
+            if (summary.publishedSets > 0) "Done · live" else "Uploaded · publishing…"
+        PublishState.PENDING -> "Uploaded · publishing…"
     }
 
     /** The dialog behind "Why isn't it on the website?"; null unless the backend gave up publishing it. */

@@ -14,7 +14,6 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
-import android.widget.ArrayAdapter
 import android.widget.ListView
 import android.widget.TextView
 import android.widget.Toast
@@ -32,7 +31,8 @@ import java.util.concurrent.Executors
  */
 class SessionsActivity : Activity() {
 
-    private class Row(val dir: File, val label: String)
+    /** [title] is the recording's name, [meta] what it holds: "59 s · 1753 frames · 52 MB". */
+    private class Row(val dir: File, val title: String, val meta: String)
 
     private lateinit var captures: File
     private val executor = Executors.newSingleThreadExecutor()
@@ -41,7 +41,7 @@ class SessionsActivity : Activity() {
 
     /** Null unless cloud upload is configured (a backend URL was built in): then this screen is exactly as before. */
     private var cloud: SessionsCloudUi? = null
-    private var listAdapter: ArrayAdapter<String>? = null
+    private var listAdapter: RowAdapter? = null
     private var baseHeader = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -51,28 +51,8 @@ class SessionsActivity : Activity() {
         keepBelowSystemBars()
         findViewById<ListView>(R.id.list).setOnItemClickListener { _, _, position, _ -> showActions(rows[position]) }
         cloud = runCatching { CloudSync.get(this).takeIf { it.config.enabled } }.getOrNull()
-            ?.let { SessionsCloudUi(this, it, ::updateCloudLabels) }
+            ?.let { SessionsCloudUi(this, it, ::updateCloudLabels, ::refresh) }
         cloud?.requestNotificationPermissionOnce()
-    }
-
-    /**
-     * Targeting a recent SDK draws content edge to edge, so without this the list header sits under the action bar
-     * and the status bar. Pad the layout by exactly what covers it (the inset already includes the action bar), keeping its own 16dp padding on top of that.
-     */
-    @Suppress("DEPRECATION")
-    private fun keepBelowSystemBars() {
-        val root = (findViewById<ViewGroup>(android.R.id.content)).getChildAt(0)
-        val base = (16 * resources.displayMetrics.density).toInt()
-        root.setOnApplyWindowInsetsListener { view, insets ->
-            view.setPadding(
-                base + insets.systemWindowInsetLeft,
-                base + insets.systemWindowInsetTop,
-                base + insets.systemWindowInsetRight,
-                base + insets.systemWindowInsetBottom,
-            )
-            insets
-        }
-        root.requestApplyInsets()
     }
 
     /** The gear in the header exists only when cloud upload is configured. */
@@ -84,6 +64,10 @@ class SessionsActivity : Activity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         if (item.itemId == R.id.action_cloud_settings) {
             cloud?.showSettings()
+            return true
+        }
+        if (item.itemId == R.id.action_my_uploads) {
+            startActivity(Intent(this, UploadStatsActivity::class.java))
             return true
         }
         return super.onOptionsItemSelected(item)
@@ -108,12 +92,12 @@ class SessionsActivity : Activity() {
 
     private fun refresh() {
         val dirs = captures.listFiles { f -> f.isDirectory }?.sortedByDescending { it.name } ?: emptyList()
-        rows = dirs.map { Row(it, describe(it)) }
-        val adapter = RowAdapter(rows.map { labelOf(it) })
+        rows = dirs.map { describe(it) }
+        val adapter = RowAdapter()
         listAdapter = adapter
         findViewById<ListView>(R.id.list).adapter = adapter
         val free = captures.parentFile?.let { it.usableSpace / 1e9 } ?: 0.0
-        baseHeader = "%d recordings · %.1f GB used · %.1f GB free".format(
+        baseHeader = "%d recordings · %.1f GB · %.1f GB free".format(
             rows.size, rows.sumOf { SessionZipper.sizeOf(it.dir) } / 1e9, free)
         findViewById<TextView>(R.id.header).text = baseHeader
         findViewById<TextView>(R.id.empty).apply {
@@ -122,46 +106,58 @@ class SessionsActivity : Activity() {
         }
     }
 
-    /** A row's label: what it always was, plus a cloud status line when cloud upload is on. */
-    private fun labelOf(row: Row): String = cloud?.let { row.label + "\n" + it.rowLine(row.dir.name) } ?: row.label
-
-
-    /** Cloud state changed: redraw only the second lines, keeping the list's scroll position. */
+    /** Cloud state changed: redraw the rows, keeping the list's scroll position. */
     private fun updateCloudLabels() {
-        val adapter = listAdapter ?: return
-        adapter.clear()
-        adapter.addAll(rows.map { labelOf(it) })
-        adapter.notifyDataSetChanged()
+        listAdapter?.notifyDataSetChanged()
         findViewById<TextView>(R.id.header).text = baseHeader
     }
 
-    /** The plain text row, plus a cloud status icon at its right end when cloud upload is on (none otherwise). */
-    private inner class RowAdapter(labels: List<String>) : ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, labels) {
+    /** A recording's row: name, what it holds, and (when cloud upload is on) its cloud status, icon and Retry button. */
+    private inner class RowAdapter : android.widget.BaseAdapter() {
+        override fun getCount() = rows.size
+        override fun getItem(position: Int) = rows[position]
+        override fun getItemId(position: Int) = position.toLong()
+
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-            val view = super.getView(position, convertView, parent) as TextView
-            val icon = rows.getOrNull(position)?.let { cloud?.rowIcon(it.dir.name) } ?: 0
-            view.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, icon, 0)
-            view.compoundDrawablePadding = (12 * resources.displayMetrics.density).toInt()
-            return view
+            val root = convertView ?: layoutInflater.inflate(R.layout.row_session, parent, false)
+            val row = rows[position]
+            root.findViewById<TextView>(R.id.rowTitle).text = row.title
+            root.findViewById<TextView>(R.id.rowMeta).text = row.meta
+            val status = root.findViewById<TextView>(R.id.rowStatus)
+            val icon = root.findViewById<android.widget.ImageView>(R.id.rowIcon)
+            val retry = root.findViewById<View>(R.id.rowRetry)
+            val ui = cloud
+            if (ui == null) {
+                status.visibility = View.GONE
+                icon.visibility = View.GONE
+                retry.visibility = View.GONE
+            } else {
+                status.visibility = View.VISIBLE
+                status.text = ui.rowLine(row.dir.name)
+                icon.visibility = View.VISIBLE
+                icon.setImageResource(ui.rowIcon(row.dir.name))
+                retry.visibility = if (ui.needsRetry(row.dir.name)) View.VISIBLE else View.GONE
+                retry.setOnClickListener { ui.retry(row.dir.name) }
+            }
+            return root
         }
     }
 
-    private fun describe(dir: File): String {
+    private fun describe(dir: File): Row {
         val manifest = File(dir, "manifest.json").takeIf { it.exists() }?.readText() ?: ""
         val frames = Regex("\"frame_count\": (\\d+)").find(manifest)?.groupValues?.get(1)?.toLongOrNull()
         val fps = Regex("\"measured_fps\": ([0-9.]+)").find(manifest)?.groupValues?.get(1)?.toDoubleOrNull()
         val complete = manifest.contains("\"complete\": true")
         val jumps = Regex("\"pose_jumps\": \\{\\s*\"count\": (\\d+)").find(manifest)?.groupValues?.get(1)?.toIntOrNull() ?: 0
         val seconds = if (frames != null && fps != null && fps > 0) frames / fps else null
-        return buildString {
-            append(dir.name.removePrefix("capture-"))
-            append("\n")
-            if (seconds != null) append("%.0f s, ".format(seconds))
-            if (frames != null) append("$frames frames, ")
-            append("%.0f MB".format(SessionZipper.sizeOf(dir) / 1e6))
-            if (jumps > 0) append(", $jumps pose jump(s)")
-            if (!complete) append(", INCOMPLETE")
-        }
+        val meta = listOfNotNull(
+            seconds?.let { "%.0f s".format(it) },
+            frames?.let { "$it frames" },
+            "%.0f MB".format(SessionZipper.sizeOf(dir) / 1e6),
+            "$jumps pose jump${if (jumps == 1) "" else "s"}".takeIf { jumps > 0 },
+            "incomplete".takeIf { !complete },
+        ).joinToString(" · ")
+        return Row(dir, dir.name.removePrefix("capture-"), meta)
     }
 
     /**
@@ -182,7 +178,7 @@ class SessionsActivity : Activity() {
         val cloudItems = cloud?.actionsFor(row.dir.name).orEmpty()
         val labels = cloudItems.map { it.label } + actions
         AlertDialog.Builder(this)
-            .setTitle(row.dir.name)
+            .setTitle(row.title)
             .setItems(labels.toTypedArray()) { _, which ->
                 if (which < cloudItems.size) {
                     cloudItems[which].run()

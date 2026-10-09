@@ -15,9 +15,11 @@ import java.io.File
  * touches Room or the network); a single background consumer then does the database work in event
  * order and talks to the scheduler.
  *
- * PoseCam never uploads while a take is being recorded: its known failure mode under load is dropped
- * images (`queue_full`), and tracking quality depends on CPU and heat headroom. So `onSessionStarted`
- * pauses the upload chain and `onSessionFinalized` resumes it.
+ * Uploads of earlier recordings keep running while a new take is recorded, so a collector who records back to back
+ * never waits for a backlog to drain (and nothing has to be restarted afterwards). The take itself is never touched:
+ * its files are not queued until it is finalized, upload work runs on background-priority threads, and the one
+ * heavy job, the pipeline export, waits for Stop. Dropped images (`queue_full`) are counted in each manifest, so a
+ * collector or reviewer can tell if upload load ever costs a take frames.
  */
 class UploadCoordinator(
     private val repository: UploadRepository,
@@ -53,8 +55,8 @@ class UploadCoordinator(
     // ---- SessionFileListener (called on the recording thread: must not block) --------------
 
     override fun onSessionStarted(sessionId: String, directory: File) {
-        // Synchronous and cheap: the upload processor checks this set before every file, so uploads
-        // stop at the next file boundary even before the consumer below has cancelled the worker.
+        // Synchronous and cheap: queue recovery, storage cleanup and the pipeline export consult this set, and must
+        // leave a session that is still being written alone.
         ActiveRecordingSessions.add(sessionId)
         events.trySend(Event.Started(sessionId, directory))
     }
@@ -94,6 +96,11 @@ class UploadCoordinator(
         }
     }
 
+    /** Make sure an upload worker is queued for whatever is waiting; cheap, and a no-op while one already is. */
+    fun resumeUploads() {
+        scope.launch { scheduler.schedule() }
+    }
+
     /** The export rotation was set: recordings whose export was waiting for it are picked up by the next pass. */
     fun onExportSettingsChanged() {
         scope.launch { scheduler.schedule() }
@@ -111,11 +118,7 @@ class UploadCoordinator(
 
     private suspend fun handle(event: Event) {
         when (event) {
-            is Event.Started -> {
-                // Pause first: stopping the upload chain matters more than the bookkeeping below.
-                scheduler.pause()
-                repository.registerSession(event.sessionId, event.directory)
-            }
+            is Event.Started -> repository.registerSession(event.sessionId, event.directory)
             is Event.Finalized -> {
                 val failure = runCatching {
                     val files = UploadPlan.forSession(event.sessionId, event.directory, staging)

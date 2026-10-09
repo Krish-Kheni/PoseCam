@@ -30,7 +30,7 @@ class CloudCardActionTest {
 
     @Test fun infoMessagesShowProgress() {
         val summary = SessionCloudSummary("s", SessionCloudStatus.UPLOADING, 9, 3, 1000, 450, null)
-        assertEquals("Uploading 45% · 3 of 9 files", CloudCardAction.infoMessage(SessionCloudStatus.UPLOADING, summary, false))
+        assertEquals("Uploading 45%", CloudCardAction.infoMessage(SessionCloudStatus.UPLOADING, summary, false))
         assertEquals("Uploading", CloudCardAction.infoMessage(SessionCloudStatus.UPLOADING, null, false))
         assertEquals("Synced to the cloud", CloudCardAction.infoMessage(SessionCloudStatus.SYNCED, null, false))
         assertEquals("Uploads start after this recording finishes", CloudCardAction.infoMessage(SessionCloudStatus.PENDING, null, true))

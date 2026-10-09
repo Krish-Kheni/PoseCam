@@ -2,12 +2,16 @@ package com.posecam.core.sync
 
 import android.content.Context
 import com.posecam.BuildConfig
-import com.posecam.core.cloud.AuthProvider
+import com.posecam.core.cloud.AccountApi
+import com.posecam.core.cloud.AccountApiClient
+import com.posecam.core.cloud.AuthSession
+import com.posecam.core.cloud.AuthStore
 import com.posecam.core.cloud.CloudApi
 import com.posecam.core.cloud.CloudApiClient
 import com.posecam.core.cloud.CloudConfig
+import com.posecam.core.cloud.CloudLog
 import com.posecam.core.cloud.InstallationId
-import com.posecam.core.cloud.NoAuthProvider
+import com.posecam.core.cloud.UserAuthProvider
 import com.posecam.CaptureActivity
 import com.posecam.SessionFileListener
 import kotlinx.coroutines.CoroutineScope
@@ -33,7 +37,8 @@ import java.io.File
  * not configured, [sessionListener] is null, the database is never opened and recording is
  * byte-for-byte what it was before cloud upload existed.
  *
- * Swapping authentication later means passing a different [AuthProvider] here; nothing else changes.
+ * Authentication is one seam: [UserAuthProvider] supplies the signed-in collector's token to [CloudApiClient]; nothing
+ * else in the upload path knows about it, except that nothing is sent while nobody is signed in.
  */
 class CloudSync private constructor(context: Context) {
     private val appContext = context.applicationContext
@@ -43,8 +48,8 @@ class CloudSync private constructor(context: Context) {
     val settings: CloudSyncSettings by lazy { CloudSyncSettings(appContext) }
     val networkStatus: NetworkStatus by lazy { NetworkStatus(appContext) }
 
-    /** Replace with a real provider (e.g. DeviceAuthProvider) once device authentication exists. */
-    private val authProvider: AuthProvider = NoAuthProvider()
+    /** Who is signed in. Recording never depends on it; uploading does. */
+    val auth: AuthStore by lazy { AuthStore(appContext) }
     private val installationId: String by lazy { InstallationId(appContext).get() }
 
     val notifier: CloudNotifier by lazy { CloudNotifier(appContext) }
@@ -74,7 +79,23 @@ class CloudSync private constructor(context: Context) {
         )
     }
 
+    private val authProvider by lazy { UserAuthProvider(auth) }
     private val api: CloudApi by lazy { CloudApiClient(config, authProvider, installationId) }
+
+    /** Sign-up, sign-in and the collector's upload history. */
+    val accounts: AccountApi by lazy { AccountApiClient(config, authProvider, installationId) }
+
+    /** The collector signed in or up: what was waiting for a token (pipes, the queue, uploads) can go. */
+    fun onSignedIn(session: AuthSession) {
+        auth.signIn(session)
+        if (!config.enabled) return
+        refreshPipes()
+        recoverQueue()
+        scope.launch { runCatching { scheduler.schedule() } }
+    }
+
+    /** Signing out keeps recordings and their queue; uploads wait for the next sign-in. */
+    fun signOut() = auth.signOut()
 
     /** The pipes offered after a take: the backend's list, cached on the phone ([Pipe.DEFAULTS] until the first fetch). */
     val pipes: PipeCatalog by lazy { PipeCatalog(api, PrefsPipeStore(appContext)) }
@@ -96,7 +117,11 @@ class CloudSync private constructor(context: Context) {
     fun startPublishTracking() {
         if (!config.enabled || publishLoop?.isActive == true) return
         publishLoop = scope.launch {
+            var lastKickAt = System.currentTimeMillis() // recovery has just scheduled the queue: give it a chance first
             while (isActive) {
+                if (AppVisibility.inForeground && runCatching { kickDue(System.currentTimeMillis() - lastKickAt) }.getOrDefault(false)) {
+                    lastKickAt = System.currentTimeMillis()
+                }
                 if (AppVisibility.inForeground) {
                     val changed = runCatching { publishTracker.checkDue() }.getOrDefault(0)
                     if (changed > 0) runCatching { retention.cleanup() }
@@ -104,6 +129,24 @@ class CloudSync private constructor(context: Context) {
                 delay(PUBLISH_TICK_MS)
             }
         }
+    }
+
+    /** Starts the queue if recordings are waiting, nothing is uploading and the policy allows it. True if it did. */
+    private suspend fun kickDue(sinceLastKickMs: Long): Boolean {
+        val policy = settings.policy
+        val due = UploadKick.shouldKick(
+            signedIn = auth.isSignedIn,
+            policy = policy,
+            networkSatisfiesPolicy = networkStatus.satisfies(policy),
+            passRunning = processor.isRunning,
+            sinceLastKickMs = sinceLastKickMs,
+            hasWork = processor.hasWork(),
+        )
+        if (due) {
+            CloudLog.i("kick_stalled")
+            scheduler.syncNow()
+        }
+        return due
     }
 
     val processor: UploadProcessor by lazy {
@@ -192,6 +235,7 @@ class CloudSync private constructor(context: Context) {
     /** App start: rebuild/resume the queue off the main thread. Adopts recordings made before cloud upload existed. */
     fun recoverQueue() {
         if (!config.enabled) return
+        UploadWatchdog.enable(appContext)
         startPublishTracking()
         scope.launch {
             runCatching { UploadQueueRecovery(capturesRoot, repository, scheduler, staging).run() }

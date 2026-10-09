@@ -19,14 +19,14 @@ class CloudOverviewTest {
 
     @Test fun countsSyncingSessionsAndTheirBytes() {
         val o = overview(summary(SessionCloudStatus.UPLOADING, 100, 400), summary(SessionCloudStatus.VERIFYING, 50, 50), summary(SessionCloudStatus.UPLOADING, 1, 3))
-        assertEquals("Syncing 3 sessions", o.message)
+        assertEquals("Uploading 3 recordings", o.message)
         assertEquals(151L, o.transferredBytes)
         assertEquals(453L, o.totalBytes)
     }
 
     @Test fun queuedSessionsAreNotAddedToTheBytesOfTheOneUploading() {
         val o = overview(summary(SessionCloudStatus.UPLOADING, 50, 120), summary(SessionCloudStatus.PENDING, 0, 300))
-        assertEquals("Syncing 1 session", o.message)
+        assertEquals("Uploading 1 recording", o.message)
         assertEquals(50L, o.transferredBytes)
         assertEquals(120L, o.totalBytes)
     }
@@ -39,13 +39,13 @@ class CloudOverviewTest {
     @Test fun failureOutranksEverythingElse() {
         val o = overview(summary(SessionCloudStatus.FAILED), summary(SessionCloudStatus.UPLOADING))
         assertEquals(CloudOverview.Kind.FAILED, o.kind)
-        assertEquals("Sync failed for 1 session", o.message)
+        assertEquals("1 upload failed", o.message)
     }
 
     @Test fun waitingWordingFollowsPolicyAndConnectivity() {
         val pending = summary(SessionCloudStatus.PENDING)
-        assertEquals("Waiting for Wi-Fi · 2 sessions", overview(pending, summary(SessionCloudStatus.WAITING_FOR_WIFI), waiting = true).message)
-        assertEquals("1 session queued for upload", overview(pending).message)
-        assertEquals("1 session waiting for manual sync", overview(pending, policy = SyncPolicy.MANUAL_ONLY).message)
+        assertEquals("Waiting for Wi-Fi · 2 recordings", overview(pending, summary(SessionCloudStatus.WAITING_FOR_WIFI), waiting = true).message)
+        assertEquals("1 recording queued", overview(pending).message)
+        assertEquals("1 recording waiting · manual", overview(pending, policy = SyncPolicy.MANUAL_ONLY).message)
     }
 }

@@ -12,4 +12,12 @@
     <string name="cloud_settings">Cloud sync settings</string>
     <string name="delete">Delete</string>
     <string name="no_recordings">No recordings yet.\n\nRecordings are stored in this app\'s private folder:\n%1$s\n\nUse Share or Save to Downloads to get them off the phone.</string>
+    <string name="auth_name">Name</string>
+    <string name="auth_email">Email</string>
+    <string name="auth_password">Password</string>
+    <string name="auth_confirm">Confirm password</string>
+    <string name="my_uploads">My uploads</string>
+    <string name="delete_all_synced">Delete all synced</string>
+    <string name="auth_show_password">Show password</string>
+    <string name="retry">Retry</string>
 </resources>

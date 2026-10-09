@@ -114,7 +114,7 @@ class CloudProgressTextTest {
             ),
             SyncPolicy.WIFI_ONLY, false,
         )
-        assertEquals("3 of 9 files · 120 MB / 560 MB", overview.progressText)
+        assertEquals("120 MB of 560 MB", overview.progressText)
         assertEquals(21, overview.progressPercent)
     }
 

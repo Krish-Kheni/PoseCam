@@ -23,6 +23,9 @@ class Pipe(val wire: String, val label: String, val color: Int? = null) {
         /** The wire id is also an S3 folder name, so it is lowercase words joined by single hyphens. */
         fun isValidWire(value: String): Boolean = WIRE_RE.matches(value)
 
+        /** "White pipes" -> "White pipe": the server names the category, the phone names one pipe. */
+        fun short(label: String): String = label.replace(Regex("(?i)pipes$"), "pipe")
+
         fun fromWire(value: String?, among: List<Pipe> = DEFAULTS): Pipe? = among.firstOrNull { it.wire == value }
 
         private val WIRE_RE = Regex("[a-z0-9]+(-[a-z0-9]+)*")
