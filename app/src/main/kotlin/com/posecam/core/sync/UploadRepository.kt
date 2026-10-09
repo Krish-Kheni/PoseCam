@@ -325,7 +325,13 @@ class UploadRepository(
     suspend fun sessionsReadyToComplete(): List<CloudSessionEntity> = dao.sessionsReadyToComplete()
 
     suspend fun markSessionSynced(sessionId: String) = mutateSession(sessionId) {
-        it.copy(syncedAt = clock(), lastError = null)
+        // Synced again means the backend may publish again, so an earlier website verdict no longer holds.
+        it.copy(syncedAt = clock(), lastError = null, publishState = PublishState.PENDING, publishedSets = 0, publishNote = null)
+    }
+
+    /** What the backend last said about this recording reaching the website (see [PublishTracker]). */
+    suspend fun recordPublish(sessionId: String, state: PublishState, sets: Int, note: String?) = mutateSession(sessionId) {
+        it.copy(publishState = state, publishedSets = sets, publishNote = note?.take(MAX_ERROR_CHARS))
     }
 
     // ---- observation -----------------------------------------------------------------------

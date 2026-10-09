@@ -17,8 +17,41 @@ class CloudUiTextTest {
         assertEquals("On this phone only", row(summary(SessionCloudStatus.LOCAL_ONLY)))
         assertEquals("Queued for upload", row(summary(SessionCloudStatus.PENDING)))
         assertEquals("Verifying…", row(summary(SessionCloudStatus.VERIFYING)))
-        assertEquals("Synced", row(summary(SessionCloudStatus.SYNCED)))
+        assertEquals("Uploaded — publishing to website…", row(summary(SessionCloudStatus.SYNCED)))
         assertEquals("Upload failed, tap to retry", row(summary(SessionCloudStatus.FAILED)))
+    }
+
+    private fun synced(state: PublishState, sets: Int = 0, note: String? = null) =
+        summary(SessionCloudStatus.SYNCED).copy(publishState = state, publishedSets = sets, publishNote = note)
+
+    @Test fun syncedReadsDoneOnlyOnceTheBackendPublishedIt() {
+        assertEquals("Uploaded — publishing to website…", row(synced(PublishState.PENDING)))
+        assertEquals("Done — live on website", row(synced(PublishState.DONE, sets = 2)))
+    }
+
+    @Test fun aPublishWithNoSetsIsNotDoneYetForARecordingThatWasExported() {
+        assertEquals("Uploaded — publishing to website…", row(synced(PublishState.DONE, sets = 0)))
+    }
+
+    @Test fun aFailedPublishSaysWhy() {
+        assertEquals("Publishing failed — ffmpeg exited 1", row(synced(PublishState.FAILED, note = "ffmpeg exited 1")))
+        assertEquals("Publishing failed — unknown error", row(synced(PublishState.FAILED)))
+        assertEquals("ffmpeg exited 1", CloudUiText.publishFailedDetail(synced(PublishState.FAILED, note = "ffmpeg exited 1"))!!.substringAfterLast("\n"))
+        assertNull(CloudUiText.publishFailedDetail(synced(PublishState.DONE, sets = 1)))
+    }
+
+    @Test fun aBackendThatDoesNotReportPublishingStaysPlainSynced() {
+        assertEquals("Synced", row(synced(PublishState.UNSUPPORTED)))
+    }
+
+    @Test fun exportProblemsStillComeBeforeThePublishLine() {
+        val offProtocol = synced(PublishState.DONE, sets = 0).copy(exportState = ExportState.OFF_PROTOCOL)
+        assertEquals("Synced — no pipeline export (off protocol)", row(offProtocol))
+    }
+
+    @Test fun deleteWarningSaysWhetherItIsOnTheWebsite() {
+        assertTrue(CloudUiText.deleteWarning(true, synced(PublishState.DONE, sets = 1)).contains("live on the website"))
+        assertTrue(CloudUiText.deleteWarning(true, synced(PublishState.PENDING)).contains("may not be on the website yet"))
     }
 
     @Test fun pendingWorkThatCannotStartReadsWaitingForWifi() {

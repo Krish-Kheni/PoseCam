@@ -87,7 +87,10 @@ class PipelineExportUploadTest {
         assertNotNull(f.repo.session(id)!!.syncedAt)
         assertEquals(ExportState.DONE, f.repo.session(id)!!.exportState)
         assertEquals(listOf(90), exportCalls)
-        assertEquals("Synced", CloudUiText.rowStatus(summary(), SyncPolicy.WIFI_ONLY, false))
+        // Uploaded is not the website: "Done" waits for the backend to say it published the recording.
+        assertEquals("Uploaded — publishing to website…", CloudUiText.rowStatus(summary(), SyncPolicy.WIFI_ONLY, false))
+        f.repo.recordPublish(id, PublishState.DONE, 2, null)
+        assertEquals("Done — live on website", CloudUiText.rowStatus(summary(), SyncPolicy.WIFI_ONLY, false))
     }
 
     @Test
@@ -375,6 +378,7 @@ class PipelineExportUploadTest {
         f.repo.markSessionCreated(id)
         processor.runQueue()
         assertNotNull(f.repo.session(id)!!.syncedAt)
+        f.repo.recordPublish(id, PublishState.DONE, 0, null) // published raw-only, as the backend does before an export exists
 
         assertEquals(RetentionBlock.EXPORT_PENDING, retention().blockedReason(f.repo.session(id)!!))
         assertTrue(retention().cleanup().deletedSessions.isEmpty())
@@ -390,6 +394,7 @@ class PipelineExportUploadTest {
             f.repo.markPreparing(it.id); f.repo.markUploading(it.id); f.repo.markUploaded(it.id); f.repo.markVerified(it.id)
         }
         f.repo.markSessionSynced(id)
+        f.repo.recordPublish(id, PublishState.DONE, 1, null)
         // The frames are covered by the verified chunk, so only the export is holding it.
         assertEquals(RetentionBlock.EXPORT_NOT_UPLOADED, retention().blockedReason(f.repo.session(id)!!))
 
@@ -405,6 +410,7 @@ class PipelineExportUploadTest {
         f.repo.markSessionCreated(id)
 
         processor.runQueue()
+        f.repo.recordPublish(id, PublishState.DONE, 0, null) // nothing to publish, and the backend says so
 
         assertNull(retention().blockedReason(f.repo.session(id)!!))
     }

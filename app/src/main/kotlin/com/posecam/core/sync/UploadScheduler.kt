@@ -110,8 +110,6 @@ class WorkManagerUploadScheduler(
             .setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(networkType)
-                    // A big backlog should not drain a nearly flat battery; a user's explicit "upload now" ignores this.
-                    .setRequiresBatteryNotLow(true)
                     .build(),
             )
             // Temporary failures retry forever with growing delays (WorkManager caps the backoff at 5 h).

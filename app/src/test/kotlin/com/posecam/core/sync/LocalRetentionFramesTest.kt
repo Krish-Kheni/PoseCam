@@ -31,6 +31,7 @@ class LocalRetentionFramesTest {
             f.repo.markPreparing(it.id); f.repo.markUploading(it.id); f.repo.markUploaded(it.id); f.repo.markVerified(it.id)
         }
         f.repo.markSessionSynced(id)
+        f.repo.recordPublish(id, PublishState.DONE, 1, null)
         f.now += TimeUnit.DAYS.toMillis(8)
         return dir
     }
@@ -79,6 +80,7 @@ class LocalRetentionFramesTest {
             f.repo.markPreparing(it.id); f.repo.markUploading(it.id); f.repo.markUploaded(it.id); f.repo.markVerified(it.id)
         }
         f.repo.markSessionSynced(id)
+        f.repo.recordPublish(id, PublishState.DONE, 1, null)
         f.now += TimeUnit.DAYS.toMillis(8)
 
         assertNull(manager().blockedReason(f.repo.session(id)!!))

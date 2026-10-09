@@ -34,6 +34,9 @@ interface CloudApi {
     /** The backend inspects the S3 object (size + checksum) before answering VERIFIED. */
     suspend fun verifyUpload(sessionId: String, relativePath: String): VerifiedUpload
 
+    /** The backend's current record of a session, including whether it has reached the website. */
+    suspend fun getSession(sessionId: String): CloudSessionView
+
     suspend fun completeSession(
         sessionId: String,
         recordingStatus: String,

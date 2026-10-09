@@ -245,6 +245,14 @@ class FakeCloudApi : CloudApi {
         return VerifiedUpload(relativePath, "VERIFIED", 0, null)
     }
 
+    /** What GET /v1/sessions/{id} reports as the publish verdict, per session; a session not listed is "pending". */
+    val publishOnServer = mutableMapOf<String, CloudSessionView>()
+
+    override suspend fun getSession(sessionId: String): CloudSessionView {
+        record("getSession", sessionId)
+        return publishOnServer[sessionId] ?: view(sessionId).copy(publishStatus = "pending")
+    }
+
     override suspend fun completeSession(sessionId: String, recordingStatus: String, files: List<SessionFileRef>): CloudSessionView {
         record("completeSession", sessionId)
         completedSessions += files

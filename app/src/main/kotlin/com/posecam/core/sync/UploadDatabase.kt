@@ -14,7 +14,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  */
 @Database(
     entities = [UploadEntity::class, CloudSessionEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class UploadDatabase : RoomDatabase() {
@@ -35,12 +35,24 @@ abstract class UploadDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Version 3: whether the backend published a synced recording to the website. Existing rows start at PENDING,
+         * so the first check after the update learns the real answer for every recording already uploaded.
+         */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE cloud_sessions ADD COLUMN publishState TEXT NOT NULL DEFAULT 'PENDING'")
+                db.execSQL("ALTER TABLE cloud_sessions ADD COLUMN publishedSets INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE cloud_sessions ADD COLUMN publishNote TEXT")
+            }
+        }
+
         @Volatile
         private var instance: UploadDatabase? = null
 
         fun get(context: Context): UploadDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, UploadDatabase::class.java, NAME)
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
                 .also { instance = it }
         }

@@ -166,6 +166,10 @@ class CloudApiClient(
         )
     }
 
+    override suspend fun getSession(sessionId: String): CloudSessionView = parsing {
+        get(listOf("v1", "sessions", sessionId)).requireObject("session").toSessionView()
+    }
+
     override suspend fun completeSession(
         sessionId: String,
         recordingStatus: String,
@@ -258,6 +262,10 @@ class CloudApiClient(
         totalBytes = optLong("totalBytes"),
         verifiedBytes = optLong("verifiedBytes"),
         completedAt = optStringOrNull("completedAt"),
+        publishStatus = optStringOrNull("publishStatus"),
+        publishedSets = optInt("publishedSets", 0),
+        publishedAt = optStringOrNull("publishedAt"),
+        publishError = optStringOrNull("publishError"),
     )
 
     private fun JSONObject.requireObject(name: String): JSONObject =

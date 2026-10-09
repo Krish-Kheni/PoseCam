@@ -119,13 +119,17 @@ class PipelineExportSettingsTest {
         old.close()
 
         val db = Room.databaseBuilder(context, UploadDatabase::class.java, name)
-            .addMigrations(UploadDatabase.MIGRATION_1_2).allowMainThreadQueries().build()
+            .addMigrations(UploadDatabase.MIGRATION_1_2, UploadDatabase.MIGRATION_2_3).allowMainThreadQueries().build()
         try {
             val session = db.uploadDao().getSession("capture-20260917T090000-a3f9c1")!!
             assertEquals("black", session.pipe) // nothing that was there is lost
             assertEquals(5000L, session.syncedAt)
             assertEquals(ExportState.PENDING, session.exportState) // so its export is made and uploaded
             assertNull(session.exportNote)
+            // So the first check after the update learns whether the website already has it.
+            assertEquals(PublishState.PENDING, session.publishState)
+            assertEquals(0, session.publishedSets)
+            assertNull(session.publishNote)
             assertEquals(1, db.uploadDao().uploadsForSession(session.sessionId).size)
             assertEquals(listOf(session.sessionId), db.uploadDao().sessionsNeedingExport().map { it.sessionId })
         } finally {

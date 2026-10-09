@@ -9,6 +9,9 @@ data class CleanupReport(val deletedSessions: List<String>, val freedBytes: Long
 /** Why a session may not (yet) be removed locally. */
 enum class RetentionBlock {
     NOT_SYNCED,
+
+    /** Uploaded, but the backend has not (yet) put it on the website: the collector cannot see it there to check it. */
+    NOT_PUBLISHED,
     STILL_RECORDING,
     RECORDING_NOT_FINAL,
     FILES_NOT_VERIFIED,
@@ -28,6 +31,8 @@ enum class RetentionBlock {
  *  * Only sessions the backend has confirmed SYNCED, whose recording is finalized, and whose
  *    every required file is VERIFIED -- and whose local files still match what was verified --
  *    are ever eligible. LOCAL_ONLY, PENDING, UPLOADING and FAILED sessions are never touched.
+ *  * Only after the backend has put them on the website, so the collector can see every recording there before its local
+ *    copy goes ([PublishState]); a recording it failed to publish stays until that is sorted out.
  *  * Even then they are kept for [retentionDays] (default 7), unless the phone is short on
  *    storage, in which case the oldest synced sessions go first until the pressure is gone.
  *  * A recording whose pipeline export is still to be made, or still on its way to the cloud, stays: the raw frames
@@ -78,6 +83,7 @@ class LocalRetentionManager(
     /** Null when the session is safe to delete; otherwise the first reason it is not. */
     suspend fun blockedReason(session: CloudSessionEntity): RetentionBlock? {
         if (session.syncedAt == null) return RetentionBlock.NOT_SYNCED
+        if (!isPublished(session)) return RetentionBlock.NOT_PUBLISHED
         if (isActivelyRecording(session.sessionId)) return RetentionBlock.STILL_RECORDING
         val directory = File(session.directoryPath)
         // "Final" is what finalizeSession recorded: PoseCam writes complete:false for a killed take, which was
@@ -104,5 +110,16 @@ class LocalRetentionManager(
         val covered = rows.filter { it.kind == UploadSourceKind.FRAME_CHUNK && it.state == UploadState.VERIFIED }
             .sumOf { it.itemCount }
         return if (FrameChunks.countJpegs(File(directory, "frames")) != covered) RetentionBlock.FRAMES_NOT_COVERED else null
+    }
+
+    /**
+     * True when the backend has finished with the recording: published it, published it without a video because none
+     * could exist, or does not report publishing at all. PENDING and FAILED keep the local copy. So does a "published"
+     * answer with no sets for a recording whose export was made: that answer predates the export and is out of date.
+     */
+    private fun isPublished(session: CloudSessionEntity): Boolean = when (session.publishState) {
+        PublishState.UNSUPPORTED -> true
+        PublishState.DONE -> session.publishedSets > 0 || session.exportState != ExportState.DONE
+        PublishState.PENDING, PublishState.FAILED -> false
     }
 }

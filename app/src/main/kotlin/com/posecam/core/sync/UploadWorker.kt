@@ -45,6 +45,8 @@ class UploadWorker(
                 }
             }
             sync.notifier.clearProgress()
+            // Recordings that just synced: ask now rather than on the next visit, so "Done" is not stale on opening.
+            runCatching { sync.publishTracker.checkDue() }
             announce(sync, report)
             // Free space held by sessions that are fully synced and past retention; never fatal.
             runCatching { sync.retention.cleanup() }

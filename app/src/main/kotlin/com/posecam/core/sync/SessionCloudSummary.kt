@@ -23,12 +23,19 @@ data class SessionCloudSummary(
     val exportFiles: Int = 0,
     val exportFilesFailed: Int = 0,
     val exportFilesVerified: Int = 0,
+    /** What the backend last said about the recording reaching the website; only meaningful once [isSynced]. */
+    val publishState: PublishState = PublishState.PENDING,
+    val publishedSets: Int = 0,
+    val publishNote: String? = null,
 ) {
     /** PENDING work that cannot start because the network policy is not satisfied reads "Waiting for Wi-Fi". */
     fun displayStatus(waitingForNetwork: Boolean): SessionCloudStatus =
         if (status == SessionCloudStatus.PENDING && waitingForNetwork) SessionCloudStatus.WAITING_FOR_WIFI else status
 
     val isSynced: Boolean get() = status == SessionCloudStatus.SYNCED
+
+    /** Synced, and the backend made at least one gallery card from it: it can be found on the website. */
+    val isLiveOnWebsite: Boolean get() = isSynced && publishState == PublishState.DONE && publishedSets > 0
 
     /** What the Recordings screen has to say about the export once the raw upload is done; see [CloudUiText.syncedLine]. */
     val exportFilesOpen: Int get() = exportFiles - exportFilesVerified
@@ -70,6 +77,9 @@ data class SessionCloudSummary(
                 exportFiles = export?.files ?: 0,
                 exportFilesFailed = export?.failedFiles ?: 0,
                 exportFilesVerified = export?.verifiedFiles ?: 0,
+                publishState = session?.publishState ?: PublishState.PENDING,
+                publishedSets = session?.publishedSets ?: 0,
+                publishNote = session?.publishNote,
             )
         }
     }

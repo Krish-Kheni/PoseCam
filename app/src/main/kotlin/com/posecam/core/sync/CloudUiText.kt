@@ -36,8 +36,26 @@ object CloudUiText {
             if (exportRotationSet) "Synced — making the pipeline export…" else "Synced — set the video rotation to make the pipeline export"
         summary.exportFilesFailed > 0 -> "Synced — pipeline export upload failed, tap to retry"
         summary.exportFilesOpen > 0 -> "Synced — uploading the pipeline export…"
-        else -> "Synced"
+        else -> publishLine(summary)
     }
+
+    /**
+     * Everything is uploaded and the export is in: the last step is the backend putting the recording on the website. The
+     * collector only sees "Done" once that has really happened (an export with no sets yet is still on its way).
+     */
+    private fun publishLine(summary: SessionCloudSummary): String = when (summary.publishState) {
+        PublishState.UNSUPPORTED -> "Synced"
+        PublishState.FAILED -> "Publishing failed — ${summary.publishNote ?: "unknown error"}"
+        PublishState.DONE ->
+            if (summary.publishedSets > 0) "Done — live on website" else "Uploaded — publishing to website…"
+        PublishState.PENDING -> "Uploaded — publishing to website…"
+    }
+
+    /** The dialog behind "Why isn't it on the website?"; null unless the backend gave up publishing it. */
+    fun publishFailedDetail(summary: SessionCloudSummary): String? =
+        if (summary.publishState != PublishState.FAILED) null
+        else "The recording is safely uploaded, but the server could not put it on the website:\n\n" +
+            (summary.publishNote ?: "unknown error")
 
     /** The dialog behind "Why no pipeline export?": the exporter's own words, which name what was wrong with the recording. */
     fun missingExportDetail(summary: SessionCloudSummary): String? = when (summary.exportState) {
@@ -86,8 +104,11 @@ object CloudUiText {
     /** What the Delete dialog says: the real cloud state instead of "make sure it has been shared". */
     fun deleteWarning(cloudEnabled: Boolean, summary: SessionCloudSummary?): String {
         if (!cloudEnabled) return "This cannot be undone. Make sure it has been shared or saved first."
-        return if (summary?.isSynced == true) {
-            "This recording is synced to the cloud, so deleting it only frees space on this phone."
+        return if (summary?.isLiveOnWebsite == true) {
+            "This recording is live on the website and safe in the cloud, so deleting it only frees space on this phone."
+        } else if (summary?.isSynced == true) {
+            "This recording is synced to the cloud, so deleting it only frees space on this phone. " +
+                "It may not be on the website yet."
         } else {
             "Not uploaded yet: this deletes the only copy. This cannot be undone."
         }

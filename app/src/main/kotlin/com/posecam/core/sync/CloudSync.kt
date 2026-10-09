@@ -12,7 +12,10 @@ import com.posecam.CaptureActivity
 import com.posecam.SessionFileListener
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -81,6 +84,28 @@ class CloudSync private constructor(context: Context) {
         if (!config.enabled) return
         scope.launch { runCatching { pipes.refresh() } }
     }
+
+    /** Asks the backend whether synced recordings have reached the website (shown as "Done"). */
+    val publishTracker: PublishTracker by lazy { PublishTracker(repository, api) }
+    private var publishLoop: Job? = null
+
+    /**
+     * While the app is on screen, keeps checking recordings that are synced but not yet on the website. Idempotent. A
+     * recording that just turned "Done" may now be deletable, so storage cleanup gets a chance right away.
+     */
+    fun startPublishTracking() {
+        if (!config.enabled || publishLoop?.isActive == true) return
+        publishLoop = scope.launch {
+            while (isActive) {
+                if (AppVisibility.inForeground) {
+                    val changed = runCatching { publishTracker.checkDue() }.getOrDefault(0)
+                    if (changed > 0) runCatching { retention.cleanup() }
+                }
+                delay(PUBLISH_TICK_MS)
+            }
+        }
+    }
+
     val processor: UploadProcessor by lazy {
         UploadProcessor(
             repository = repository,
@@ -167,6 +192,7 @@ class CloudSync private constructor(context: Context) {
     /** App start: rebuild/resume the queue off the main thread. Adopts recordings made before cloud upload existed. */
     fun recoverQueue() {
         if (!config.enabled) return
+        startPublishTracking()
         scope.launch {
             runCatching { UploadQueueRecovery(capturesRoot, repository, scheduler, staging).run() }
             runCatching { retention.cleanup() }
@@ -186,6 +212,9 @@ class CloudSync private constructor(context: Context) {
     private fun storagePressure(root: File): Boolean = root.usableSpace < (CaptureActivity.MIN_FREE_GB + 2.0) * 1e9
 
     companion object {
+        /** How often the publish loop wakes up; each recording is asked on its own, slower schedule. */
+        private const val PUBLISH_TICK_MS = 5_000L
+
         @Volatile
         private var instance: CloudSync? = null
 

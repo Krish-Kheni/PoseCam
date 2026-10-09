@@ -46,6 +46,31 @@ class CloudApiClientTest {
     }
 
     @Test
+    fun getSessionReadsWhetherTheRecordingReachedTheWebsite() = runBlocking {
+        server.enqueue(json("""{"session":${sessionJson.dropLast(1)},"publishStatus":"done","publishedAt":"2026-10-09T10:00:00Z","publishedSets":2,"publishError":null},"files":[]}"""))
+
+        val session = client().getSession("s1")
+
+        val request = server.takeRequest()
+        assertEquals("GET", request.method)
+        assertEquals("/v1/sessions/s1", request.path)
+        assertEquals("done", session.publishStatus)
+        assertEquals(2, session.publishedSets)
+        assertEquals("2026-10-09T10:00:00Z", session.publishedAt)
+        assertNull(session.publishError)
+    }
+
+    @Test
+    fun aBackendThatDoesNotReportPublishingGivesANullStatus() = runBlocking {
+        server.enqueue(json("""{"session":$sessionJson,"files":[]}"""))
+
+        val session = client().getSession("s1")
+
+        assertNull(session.publishStatus)
+        assertEquals(0, session.publishedSets)
+    }
+
+    @Test
     fun listPipesGetsTheV1PipesPathAndReadsTheList() = runBlocking {
         server.enqueue(json("""{"pipes":[{"id":"white","label":"White pipes","color":"#f8fafc","order":1},{"id":"pink","label":"Pink Pipes","color":null,"order":4}]}"""))
 

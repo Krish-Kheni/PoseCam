@@ -85,6 +85,24 @@ enum class ExportState {
     val isMissing: Boolean get() = this != DONE
 }
 
+/**
+ * Where a synced recording stands on its way to the website, as last reported by the backend. SYNCED only means the
+ * files arrived; the backend then turns them into gallery cards, which takes a while and can fail.
+ */
+enum class PublishState {
+    /** Not on the website yet (or not asked yet). Checked again until the backend answers. */
+    PENDING,
+
+    /** The backend published it. With zero sets it was published without a video (nothing to label). */
+    DONE,
+
+    /** The backend gave up publishing it; [CloudSessionEntity.publishNote] says why. */
+    FAILED,
+
+    /** The backend does not report publishing (an older one): behave as before and never wait for it. */
+    UNSUPPORTED,
+}
+
 /** What the Sessions UI shows; derived from queue state, never stored. */
 enum class SessionCloudStatus {
     /** Cloud sync is disabled/unconfigured, or the session has not been queued. */

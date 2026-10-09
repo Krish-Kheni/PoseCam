@@ -36,7 +36,48 @@ class LocalRetentionManagerTest {
         }
         f.now = syncedAt
         f.repo.markSessionSynced(id)
+        f.repo.recordPublish(id, PublishState.DONE, 1, null)
         return dir
+    }
+
+    @Test
+    fun keepsASyncedSessionUntilTheWebsiteHasIt() = runBlocking {
+        val dir = syncedSession("s1")
+        f.repo.recordPublish("s1", PublishState.PENDING, 0, null)
+        f.now += TimeUnit.DAYS.toMillis(30)
+        pressure = true // even a full phone does not delete what the collector cannot see on the website yet
+
+        assertEquals(RetentionBlock.NOT_PUBLISHED, manager().blockedReason(f.repo.session("s1")!!))
+        assertTrue(manager().cleanup().deletedSessions.isEmpty())
+        assertTrue(dir.isDirectory)
+    }
+
+    @Test
+    fun keepsASessionTheBackendFailedToPublish() = runBlocking {
+        syncedSession("s1")
+        f.repo.recordPublish("s1", PublishState.FAILED, 0, "ffmpeg exited 1")
+
+        assertEquals(RetentionBlock.NOT_PUBLISHED, manager().blockedReason(f.repo.session("s1")!!))
+    }
+
+    @Test
+    fun aRawOnlyPublishIsNotEnoughForARecordingWhoseExportWasMade() = runBlocking {
+        syncedSession("s1")
+        f.repo.markExportMissing("s1", ExportState.FAILED, "x") // any state, then:
+        f.dao.updateSession(f.repo.session("s1")!!.copy(exportState = ExportState.DONE))
+        f.repo.recordPublish("s1", PublishState.DONE, 0, null)
+
+        assertEquals(RetentionBlock.NOT_PUBLISHED, manager().blockedReason(f.repo.session("s1")!!))
+        f.repo.recordPublish("s1", PublishState.DONE, 1, null)
+        assertNull(manager().blockedReason(f.repo.session("s1")!!))
+    }
+
+    @Test
+    fun aBackendThatDoesNotReportPublishingNeverHoldsCleanupBack() = runBlocking {
+        syncedSession("s1")
+        f.repo.recordPublish("s1", PublishState.UNSUPPORTED, 0, null)
+
+        assertNull(manager().blockedReason(f.repo.session("s1")!!))
     }
 
     @Test

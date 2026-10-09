@@ -21,6 +21,12 @@ data class CloudSessionView(
     val totalBytes: Long,
     val verifiedBytes: Long,
     val completedAt: String?,
+    /** "pending" | "done" | "failed": whether the recording reached the website. Null from a backend that does not say. */
+    val publishStatus: String? = null,
+    /** How many gallery sets the recording became; 0 with "done" means it was published without a video. */
+    val publishedSets: Int = 0,
+    val publishedAt: String? = null,
+    val publishError: String? = null,
 )
 
 data class CreateSessionRequest(

@@ -83,6 +83,14 @@ data class CloudSessionEntity(
     val exportState: ExportState = ExportState.PENDING,
     /** Why the export is missing, in the collector's words: the exporter's message. Null unless [exportState] says so. */
     val exportNote: String? = null,
+    /** Whether the backend has published this recording to the website. Added in database version 3. */
+    @ColumnInfo(defaultValue = "PENDING")
+    val publishState: PublishState = PublishState.PENDING,
+    /** Gallery sets the backend made from it (see [PublishState.DONE]). */
+    @ColumnInfo(defaultValue = "0")
+    val publishedSets: Int = 0,
+    /** The backend's reason when [publishState] is FAILED. */
+    val publishNote: String? = null,
 )
 
 /**

@@ -146,6 +146,12 @@ class SessionsCloudUi(
     private fun exportActions(sessionId: String, summary: SessionCloudSummary?): List<Action> {
         if (summary == null || !summary.isSynced) return emptyList()
         val actions = mutableListOf<Action>()
+        CloudUiText.publishFailedDetail(summary)?.let { detail ->
+            actions += Action("Why isn't it on the website?") {
+                AlertDialog.Builder(activity).setTitle("Not on the website").setMessage(detail)
+                    .setPositiveButton(R.string.close, null).show()
+            }
+        }
         CloudUiText.missingExportDetail(summary)?.let { detail ->
             actions += Action("Why no pipeline export?") {
                 AlertDialog.Builder(activity).setTitle("No pipeline export").setMessage(detail)
